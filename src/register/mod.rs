@@ -340,59 +340,34 @@ pub mod dmp {
     pub const BAC_CNTR: u16 = 48 * 16 + 2;
 }
 
-/// Registros del magnetómetro AK09916
-pub mod compass {
-    // Direcciones del magnetómetro
-    pub const AK09916_I2C_ADDR: u8 = 0x0C;
+// /// Registros del magnetómetro AK09916
+// pub mod compass {
+//     // Direcciones del magnetómetro
+//     pub const AK09916_I2C_ADDR: u8 = 0x0C;
     
-    // Registros del AK09916
-    pub const WHO_AM_I: u8 = 0x01;
-    pub const ST1: u8 = 0x10;
-    pub const HXL: u8 = 0x11;
-    pub const HXH: u8 = 0x12;
-    pub const HYL: u8 = 0x13;
-    pub const HYH: u8 = 0x14;
-    pub const HZL: u8 = 0x15;
-    pub const HZH: u8 = 0x16;
-    pub const ST2: u8 = 0x18;
-    pub const CNTL2: u8 = 0x31;
-    pub const CNTL3: u8 = 0x32;
+//     // Registros del AK09916
+//     pub const WHO_AM_I: u8 = 0x01;
+//     pub const ST1: u8 = 0x10;
+//     pub const HXL: u8 = 0x11;
+//     pub const HXH: u8 = 0x12;
+//     pub const HYL: u8 = 0x13;
+//     pub const HYH: u8 = 0x14;
+//     pub const HZL: u8 = 0x15;
+//     pub const HZH: u8 = 0x16;
+//     pub const ST2: u8 = 0x18;
+//     pub const CNTL2: u8 = 0x31;
+//     pub const CNTL3: u8 = 0x32;
 
-    // Constantes de control
-    pub const MODE_POWER_DOWN: u8 = 0x00;
-    pub const MODE_SINGLE_MEASURE: u8 = 0x01;
-    pub const MODE_CONTINUOUS_1: u8 = 0x02;
-    pub const MODE_CONTINUOUS_2: u8 = 0x04;
-    pub const MODE_CONTINUOUS_3: u8 = 0x06;
-    pub const MODE_CONTINUOUS_4: u8 = 0x08;
-    pub const MODE_SELF_TEST: u8 = 0x10;
-    pub const AK09916_RESET: u8 = 0x01;
-}
-
-// Se ha movido la definición de registros de compass.rd a este módulo:
-pub mod compass_rd {
-    // AK09916 registers
-    pub const AK09916_WIA1: u8 = 0x00;
-    pub const AK09916_WIA2: u8 = 0x01;
-    pub const AK09916_ST1: u8 = 0x10;
-    pub const AK09916_HXL: u8 = 0x11;
-    pub const AK09916_HXH: u8 = 0x12;
-    pub const AK09916_HYL: u8 = 0x13;
-    pub const AK09916_HYH: u8 = 0x14;
-    pub const AK09916_HZL: u8 = 0x15;
-    pub const AK09916_HZH: u8 = 0x16;
-    pub const AK09916_ST2: u8 = 0x18;
-    pub const AK09916_CNTL2: u8 = 0x31;
-    pub const AK09916_CNTL3: u8 = 0x32;
-    
-    // AK09916 CNTL2 modes
-    pub const AK09916_MODE_POWERDOWN: u8 = 0x00;
-    pub const AK09916_MODE_SINGLE: u8 = 0x01;
-    pub const AK09916_MODE_CONT_10HZ: u8 = 0x02;
-    pub const AK09916_MODE_CONT_20HZ: u8 = 0x04;
-    pub const AK09916_MODE_CONT_50HZ: u8 = 0x06;
-    pub const AK09916_MODE_CONT_100HZ: u8 = 0x08;
-}
+//     // Constantes de control
+//     pub const MODE_POWER_DOWN: u8 = 0x00;
+//     pub const MODE_SINGLE_MEASURE: u8 = 0x01;
+//     pub const MODE_CONTINUOUS_1: u8 = 0x02;
+//     pub const MODE_CONTINUOUS_2: u8 = 0x04;
+//     pub const MODE_CONTINUOUS_3: u8 = 0x06;
+//     pub const MODE_CONTINUOUS_4: u8 = 0x08;
+//     pub const MODE_SELF_TEST: u8 = 0x10;
+//     pub const AK09916_RESET: u8 = 0x01;
+// }
 
 /// Registros para magnetómetros AKM
 pub mod ak_reg {
@@ -405,21 +380,35 @@ pub mod ak_reg {
     pub const CNTL: u8 = 0x0A;        // Control (alias de MODE)
     pub const ASTC: u8 = 0x0C;        // Control de self-test
     
+    // AK09916 registers
+    pub const AK09916_HXL: u8 = 0x11;
+    pub const AK09916_HXH: u8 = 0x12;
+    pub const AK09916_HYL: u8 = 0x13;
+    pub const AK09916_HYH: u8 = 0x14;
+    pub const AK09916_HZL: u8 = 0x15;
+    pub const AK09916_HZH: u8 = 0x16;
+    
     // AK09916 específico
     pub const AK09916_STATUS1: u8 = 0x10;
     pub const AK09916_STATUS2: u8 = 0x18;
+    pub const AK09916_CNTL1: u8 = 0x30;
     pub const AK09916_CNTL2: u8 = 0x31;
     pub const AK09916_CNTL3: u8 = 0x32;
     pub const AK09916_MEASURE_DATA: u8 = 0x11;
     
     // Otras variantes de AK
     pub const AK09911_STATUS1: u8 = 0x10;
+    pub const AK09911_STATUS2: u8 = 0x18;
+    pub const AK09911_CNTL1: u8 = 0x30;
     pub const AK09911_CNTL2: u8 = 0x31;
+    pub const AK09911_CNTL3: u8 = 0x32;
     pub const AK09911_MEASURE_DATA: u8 = 0x11;
     
     pub const AK09912_STATUS1: u8 = 0x10;
+    pub const AK09912_STATUS2: u8 = 0x18;
     pub const AK09912_CNTL1: u8 = 0x30;
     pub const AK09912_CNTL2: u8 = 0x31;
+    pub const AK09912_CNTL3: u8 = 0x32;
     pub const AK09912_MEASURE_DATA: u8 = 0x11;
     
     pub const AK8963_CNTL1: u8 = 0x0A;

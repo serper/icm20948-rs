@@ -8,7 +8,6 @@ use embedded_hal::blocking::delay::DelayMs;
 use crate::controls::AccelData;
 use crate::base::{SystemTimeSource, TimeSource};
 use crate::compass::CompassConfig;
-use crate::fifo::{self, FifoDecodedData};
 
 // Import bits from types
 use crate::types::bits;
@@ -33,7 +32,9 @@ pub enum Icm20948Error {
     FirmwareVerificationFailed,
     WhoAmIError,
     InvalidOperation,
-    Device, // Añadir este nuevo variante para errores de dispositivo genéricos
+    Device,
+    Timeout,
+    Overflow,
     // Add other error types as needed
 }
 

@@ -11,7 +11,6 @@ use core::default::Default;
 
 // Import register
 use crate::register::registers::bank0;
-use crate::register::compass_rd as compass_reg;
 use crate::types::scale_factor as scale_factor;
 use crate::register::ak_reg as ak_reg;
 use crate::types::ak_val as ak_val;
@@ -20,6 +19,16 @@ use crate::types::slv_bits as slv_bits;
 
 /// Tamaño de los datos del magnetómetro (2 bytes por eje x 3 ejes)
 pub const COMPASS_DATA_SZ: usize = 6;
+
+pub mod compass_rd {
+    // AK09916 CNTL2 modes
+    pub const MODE_POWERDOWN: u8 = 0x00;
+    pub const MODE_SINGLE: u8 = 0x01;
+    pub const MODE_CONT_10HZ: u8 = 0x02;
+    pub const MODE_CONT_20HZ: u8 = 0x04;
+    pub const MODE_CONT_50HZ: u8 = 0x06;
+    pub const MODE_CONT_100HZ: u8 = 0x08;
+}
 
 /// Tipos de magnetómetros compatibles
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -108,7 +117,7 @@ impl Default for CompassConfig {
             compass_i2c_addr: 0,
             compass_state: CompassState::Reset,
             calibration: CompassCalibrationData::default(),
-            mode: compass_reg::AK09916_MODE_CONT_20HZ,
+            mode: compass_rd::MODE_SINGLE,
         }
     }
 }
@@ -226,13 +235,16 @@ where
         // Inicializar la configuración secundaria I2C
         self.init_secondary_i2c()?;
         
+        // Esperar un momento para que el bus I2C se estabilice
+        self.delay.delay_ms(20u32);
+
         // Leer WHOAMI del compás
         let mut whoami_data = [0u8];
-        self.read_secondary_i2c(SecondaryI2cChannel::Slave0, compass_i2c_addr, compass_reg::AK09916_WIA1, &mut whoami_data)?;
+        self.read_secondary_i2c(SecondaryI2cChannel::Slave3, compass_i2c_addr, ak_reg::WIA, &mut whoami_data)?;
         
         // Verificar que es un compás AKM
         if whoami_data[0] != ak_val::WIA_VAL {
-            return Err(Icm20948Error::InvalidParameter);
+            return Err(Icm20948Error::WhoAmIError);
         }
         
         // Crear una configuración de compás
@@ -241,7 +253,7 @@ where
             compass_i2c_addr,
             compass_state: CompassState::Initialized,
             calibration: CompassCalibrationData::default(),
-            mode: compass_reg::AK09916_MODE_CONT_20HZ,
+            mode: compass_rd::MODE_SINGLE,
         };
         
         // Leer valores de sensibilidad desde el propio AKM
@@ -260,7 +272,7 @@ where
             };
             
             // Poner en modo ROM
-            self.write_secondary_i2c(SecondaryI2cChannel::Slave1, compass_i2c_addr, mode_reg, mode_val)?;
+            self.write_secondary_i2c(SecondaryI2cChannel::Slave3, compass_i2c_addr, mode_reg, mode_val)?;
             
             // Leer sensibilidad
             let sens_reg = match compass_type {
@@ -270,7 +282,7 @@ where
             };
             
             let mut sens_data = [0u8; 3];
-            self.read_secondary_i2c(SecondaryI2cChannel::Slave0, compass_i2c_addr, sens_reg, &mut sens_data)?;
+            self.read_secondary_i2c(SecondaryI2cChannel::Slave3, compass_i2c_addr, sens_reg, &mut sens_data)?;
             compass_config.calibration.sensitivity = sens_data;
         }
         
@@ -282,13 +294,13 @@ where
             _ => ak_reg::MODE,
         };
         
-        self.write_secondary_i2c(SecondaryI2cChannel::Slave1, compass_i2c_addr, mode_reg, ak_val::POWER_DOWN)?;
+        self.write_secondary_i2c(SecondaryI2cChannel::Slave3, compass_i2c_addr, mode_reg, ak_val::POWER_DOWN)?;
         
         // Configurar para modo cíclico si es AK09912
         if compass_type == CompassType::AK09912 {
             // Aplicar filtro de supresión de ruido
             self.write_secondary_i2c(
-                SecondaryI2cChannel::Slave1,
+                SecondaryI2cChannel::Slave3,
                 compass_i2c_addr,
                 ak_reg::AK09912_CNTL1,
                 0x20, // NSF = 1 (filtro bajo)
@@ -305,43 +317,54 @@ where
     }
     
     /// Realiza una lectura del compás
-    pub fn read_compass(&mut self, config: &CompassConfig) -> Result<CompassData, Icm20948Error> {
-        if self.base_state.compass_config.is_none() || config.compass_state != CompassState::Setup {
+    pub fn read_compass(&mut self, timeout_ms: u32) -> Result<CompassData, Icm20948Error> {
+        let timeout_ms = if timeout_ms == 0 { 1000 } else { timeout_ms };
+        if self.base_state.compass_config.is_none() || self.base_state.compass_config.as_ref().unwrap().compass_state != CompassState::Setup {
             return Err(Icm20948Error::InvalidParameter);
         }
         
-        // Establecer modo de medida única
-        let mode_reg = match config.compass_type {
-            CompassType::AK09916 => ak_reg::AK09916_CNTL2,
-            CompassType::AK09911 => ak_reg::AK09911_CNTL2,
-            CompassType::AK09912 => ak_reg::AK09912_CNTL2,
-            _ => ak_reg::MODE,
-        };
-        
-        self.write_secondary_i2c(SecondaryI2cChannel::Slave1, config.compass_i2c_addr, mode_reg, ak_val::SINGLE_MEASURE)?;
-        
-        // Esperar a que estén listos los datos
-        // Esto normalmente implicaría un delay, pero depende de la implementación
+        if self.base_state.compass_config.as_mut().unwrap().mode != compass_rd::MODE_SINGLE {
+            // Establecer modo de medida única
+            let mode_reg = match self.base_state.compass_config.as_ref().unwrap().compass_type {
+                CompassType::AK09916 => ak_reg::AK09916_CNTL2,
+                CompassType::AK09911 => ak_reg::AK09911_CNTL2,
+                CompassType::AK09912 => ak_reg::AK09912_CNTL2,
+                _ => compass_rd::MODE_SINGLE,
+            };
+            
+            self.write_secondary_i2c(SecondaryI2cChannel::Slave3, self.base_state.compass_config.as_ref().unwrap().compass_i2c_addr, mode_reg, ak_val::SINGLE_MEASURE)?;
+        }
         
         // Leer registro de estado para verificar si hay datos listos
-        let status_reg = match config.compass_type {
+        let status_reg = match self.base_state.compass_config.as_ref().unwrap().compass_type {
             CompassType::AK09916 => ak_reg::AK09916_STATUS1,
             CompassType::AK09911 => ak_reg::AK09911_STATUS1,
             CompassType::AK09912 => ak_reg::AK09912_STATUS1,
             _ => ak_reg::STATUS,
         };
         
-        let mut status = [0u8];
-        self.read_secondary_i2c(SecondaryI2cChannel::Slave0, config.compass_i2c_addr, status_reg, &mut status)?;
-        
-        // Verificar bit DRDY
-        if (status[0] & ak_val::DRDY) == 0 {
-            // Datos no listos
-            return Err(Icm20948Error::InvalidParameter);
+        // Esperar a que los datos estén listos (DRDY)
+        let mut count = 0;
+        while count < timeout_ms {
+            let mut status = [0u8];
+            self.read_secondary_i2c(SecondaryI2cChannel::Slave3, self.base_state.compass_config.as_ref().unwrap().compass_i2c_addr, status_reg, &mut status)?;
+            
+            // Verificar bit DRDY
+            if (status[0] & ak_val::DRDY) == 0 {
+                // Datos no listos
+                count += 1;
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                continue;
+            }
+            break;
+        }
+
+        if count == timeout_ms {
+            return Err(Icm20948Error::Timeout);
         }
         
         // Leer datos de medición
-        let data_reg = match config.compass_type {
+        let data_reg = match self.base_state.compass_config.as_ref().unwrap().compass_type {
             CompassType::AK09916 => ak_reg::AK09916_MEASURE_DATA,
             CompassType::AK09911 => ak_reg::AK09911_MEASURE_DATA,
             CompassType::AK09912 => ak_reg::AK09912_MEASURE_DATA,
@@ -349,7 +372,7 @@ where
         };
         
         let mut raw_data = [0u8; 6];
-        self.read_secondary_i2c(SecondaryI2cChannel::Slave0, config.compass_i2c_addr, data_reg, &mut raw_data)?;
+        self.read_secondary_i2c(SecondaryI2cChannel::Slave3, self.base_state.compass_config.as_ref().unwrap().compass_i2c_addr, data_reg, &mut raw_data)?;
         
         // Convertir a valores de 16 bits
         let mut mag_values = [0i16; 3];
@@ -358,12 +381,12 @@ where
         }
         
         // Aplicar sensibilidad y convertir a µT
-        let scale_factor = match config.compass_type {
+        let scale_factor = match self.base_state.compass_config.as_ref().unwrap().compass_type {
             CompassType::AK09916 => scale_factor::AK09916,
             CompassType::AK09911 => scale_factor::AK09911,
             CompassType::AK09912 => scale_factor::AK09912,
             CompassType::AK08963 => {
-                if config.calibration.scale == 0 {
+                if self.base_state.compass_config.as_ref().unwrap().calibration.scale == 0 {
                     scale_factor::AK8963_14BIT
                 } else {
                     scale_factor::AK8963_16BIT
@@ -380,8 +403,8 @@ where
         for i in 0..3 {
             let mut tmp_val = 0;
             for j in 0..3 {
-                let sens_adj = (config.calibration.sensitivity[j] as i32 + 128) as f32;
-                let matrix_val = config.calibration.mounting_matrix[i*3 + j] as f32;
+                let sens_adj = (self.base_state.compass_config.as_ref().unwrap().calibration.sensitivity[j] as i32 + 128) as f32;
+                let matrix_val = self.base_state.compass_config.as_ref().unwrap().calibration.mounting_matrix[i*3 + j] as f32;
                 tmp_val += (mag_values[j] as f32 * matrix_val * sens_adj / 256.0) as i32;
             }
             compensated[i] = (tmp_val as f32 * scale_factor as f32) / (1u64 << 30) as f32;
@@ -392,18 +415,56 @@ where
         mag_data.z = compensated[2];
         mag_data.accuracy = 3; // Alta precisión
         mag_data.timestamp_us = SystemTimeSource.get_timestamp_us();
+
+        // Leer datos de estado
+        let status_reg = match self.base_state.compass_config.as_ref().unwrap().compass_type {
+            CompassType::AK09916 => ak_reg::AK09916_STATUS2,
+            CompassType::AK09911 => ak_reg::AK09911_STATUS2,
+            CompassType::AK09912 => ak_reg::AK09912_STATUS2,
+            _ => ak_reg::STATUS,
+        };
+
+        let mut status_data = [0u8; 1];
+        self.read_secondary_i2c(SecondaryI2cChannel::Slave3, self.base_state.compass_config.as_ref().unwrap().compass_i2c_addr, status_reg, &mut status_data)?;
+
+        // Verificar si hay errores de medición
+        if (status_data[0] & 0x08) != 0 {
+            return Err(Icm20948Error::Overflow);
+        }
         
         Ok(mag_data)
     }
     
     /// Verifica si el compás está conectado
-    pub fn compass_is_connected(&self, config: &CompassConfig) -> bool {
-        self.base_state.compass_config.is_some() && config.compass_state == CompassState::Setup
+    pub fn compass_is_connected(&self) -> bool {
+        self.base_state.compass_config.is_some() && self.base_state.compass_config.as_ref().unwrap().compass_state == CompassState::Setup
+    }
+
+    /// Configura el modo de operación del compás
+    pub fn set_compass_mode(&mut self, mode: u8) -> Result<(), Icm20948Error> {
+        if self.base_state.compass_config.is_none() || self.base_state.compass_config.as_ref().unwrap().compass_state != CompassState::Setup {
+            return Err(Icm20948Error::InvalidParameter);
+        }
+        
+        // Guardar el modo en la configuración del compás
+        self.base_state.compass_config.as_mut().unwrap().mode = mode;
+        
+        // Configurar el modo en el registro correspondiente
+        let mode_reg = match self.base_state.compass_config.as_ref().unwrap().compass_type {
+            CompassType::AK09916 => ak_reg::AK09916_CNTL2,
+            CompassType::AK09911 => ak_reg::AK09911_CNTL2,
+            CompassType::AK09912 => ak_reg::AK09912_CNTL2,
+            _ => ak_reg::MODE,
+        };
+        
+        self.write_secondary_i2c(SecondaryI2cChannel::Slave3, self.base_state.compass_config.as_ref().unwrap().compass_i2c_addr, mode_reg, mode)?;
+        
+        Ok(())
     }
     
     /// Realiza un self-test del compás
-    pub fn check_compass_self_test(&mut self, config: &CompassConfig) -> Result<bool, Icm20948Error> {
-        if !self.base_state.compass_config.is_some() || config.compass_state != CompassState::Setup {
+    pub fn check_compass_self_test(&mut self) -> Result<bool, Icm20948Error> {
+        if !self.base_state.compass_config.is_some() || self.base_state.compass_config.as_ref().unwrap().compass_state != CompassState::Setup {
             return Err(Icm20948Error::InvalidParameter);
         }
         
@@ -418,37 +479,36 @@ where
         self.write_regs_raw(slave_reg::I2C_SLV1_CTRL, &[0])?;
         
         // Poner compás en modo power down
-        let mode_reg = match config.compass_type {
+        let mode_reg = match self.base_state.compass_config.as_ref().unwrap().compass_type {
             CompassType::AK09916 => ak_reg::AK09916_CNTL2,
             CompassType::AK09911 => ak_reg::AK09911_CNTL2,
             CompassType::AK09912 => ak_reg::AK09912_CNTL2,
             _ => ak_reg::MODE,
         };
         
-        self.write_secondary_i2c(SecondaryI2cChannel::Slave1, config.compass_i2c_addr, mode_reg, ak_val::POWER_DOWN)?;
+        self.write_secondary_i2c(SecondaryI2cChannel::Slave3, self.base_state.compass_config.as_ref().unwrap().compass_i2c_addr, mode_reg, ak_val::POWER_DOWN)?;
         
         // Activar self-test si no es AK09911/AK09912/AK09916
-        if config.compass_type != CompassType::AK09911 && 
-           config.compass_type != CompassType::AK09912 &&
-           config.compass_type != CompassType::AK09916 {
-            self.write_secondary_i2c(SecondaryI2cChannel::Slave1, config.compass_i2c_addr, ak_reg::ASTC, ak_val::SELF_TEST)?;
+        if self.base_state.compass_config.as_ref().unwrap().compass_type != CompassType::AK09911 && 
+           self.base_state.compass_config.as_ref().unwrap().compass_type != CompassType::AK09912 &&
+           self.base_state.compass_config.as_ref().unwrap().compass_type != CompassType::AK09916 {
+            self.write_secondary_i2c(SecondaryI2cChannel::Slave3, self.base_state.compass_config.as_ref().unwrap().compass_i2c_addr, ak_reg::ASTC, ak_val::SELF_TEST)?;
         }
         
         // Configurar modo de self-test
-        let st_mode = match config.compass_type {
+        let st_mode = match self.base_state.compass_config.as_ref().unwrap().compass_type {
             CompassType::AK09916 => ak_val::AK09916_MODE_ST,
             CompassType::AK09911 => ak_val::AK09916_MODE_ST, // Mismo valor para AK09911
             CompassType::AK09912 => ak_val::AK09916_MODE_ST, // Mismo valor para AK09912
             _ => ak_val::SELF_TEST,
         };
-        
-        self.write_secondary_i2c(SecondaryI2cChannel::Slave1, config.compass_i2c_addr, mode_reg, st_mode)?;
+        self.write_secondary_i2c(SecondaryI2cChannel::Slave3, self.base_state.compass_config.as_ref().unwrap().compass_i2c_addr, mode_reg, st_mode)?;
         
         // Esperar a que los datos estén listos
         // Normalmente aquí habría un delay entre 10-15ms
         
         // Verificar bit DRDY
-        let status_reg = match config.compass_type {
+        let status_reg = match self.base_state.compass_config.as_ref().unwrap().compass_type {
             CompassType::AK09916 => ak_reg::AK09916_STATUS1,
             CompassType::AK09911 => ak_reg::AK09911_STATUS1,
             CompassType::AK09912 => ak_reg::AK09912_STATUS1,
@@ -456,7 +516,7 @@ where
         };
         
         let mut status = [0u8];
-        self.read_secondary_i2c(SecondaryI2cChannel::Slave0, config.compass_i2c_addr, status_reg, &mut status)?;
+        self.read_secondary_i2c(SecondaryI2cChannel::Slave3, self.base_state.compass_config.as_ref().unwrap().compass_i2c_addr, status_reg, &mut status)?;
         
         if (status[0] & ak_val::DRDY) == 0 {
             // Datos no listos, self-test fallido
@@ -464,7 +524,7 @@ where
         }
         
         // Leer datos de self-test
-        let data_reg = match config.compass_type {
+        let data_reg = match self.base_state.compass_config.as_ref().unwrap().compass_type {
             CompassType::AK09916 => ak_reg::AK09916_MEASURE_DATA,
             CompassType::AK09911 => ak_reg::AK09911_MEASURE_DATA,
             CompassType::AK09912 => ak_reg::AK09912_MEASURE_DATA,
@@ -472,7 +532,7 @@ where
         };
         
         let mut raw_data = [0u8; 6];
-        self.read_secondary_i2c(SecondaryI2cChannel::Slave0, config.compass_i2c_addr, data_reg, &mut raw_data)?;
+        self.read_secondary_i2c(SecondaryI2cChannel::Slave3, self.base_state.compass_config.as_ref().unwrap().compass_i2c_addr, data_reg, &mut raw_data)?;
         
         // Convertir a valores de 16 bits
         let mut st_values = [0i16; 3];
@@ -481,14 +541,14 @@ where
         }
         
         // Aplicar sensibilidad
-        let shift = if config.compass_type == CompassType::AK09911 { 7 } else { 8 };
+        let shift = if self.base_state.compass_config.as_ref().unwrap().compass_type == CompassType::AK09911 { 7 } else { 8 };
         for i in 0..3 {
-            let sens_adj = (config.calibration.sensitivity[i] + 128) as i32;
+            let sens_adj = (self.base_state.compass_config.as_ref().unwrap().calibration.sensitivity[i] + 128) as i32;
             st_values[i] = ((st_values[i] as i32 * sens_adj) >> shift) as i16;
         }
         
         // Ajustar para AK8963 con 16-bit
-        if config.compass_type == CompassType::AK08963 && config.calibration.scale == 1 {
+        if self.base_state.compass_config.as_ref().unwrap().compass_type == CompassType::AK08963 && self.base_state.compass_config.as_ref().unwrap().calibration.scale == 1 {
             // Doblar los valores para 16-bit mode
             for i in 0..3 {
                 st_values[i] <<= 2;
@@ -496,22 +556,22 @@ where
         }
         
         // Verificar contra límites
-        let pass = st_values[0] > config.calibration.st_lower[0] && 
-                  st_values[0] < config.calibration.st_upper[0] &&
-                  st_values[1] > config.calibration.st_lower[1] && 
-                  st_values[1] < config.calibration.st_upper[1] &&
-                  st_values[2] > config.calibration.st_lower[2] && 
-                  st_values[2] < config.calibration.st_upper[2];
+        let pass = st_values[0] > self.base_state.compass_config.as_ref().unwrap().calibration.st_lower[0] && 
+                  st_values[0] < self.base_state.compass_config.as_ref().unwrap().calibration.st_upper[0] &&
+                  st_values[1] > self.base_state.compass_config.as_ref().unwrap().calibration.st_lower[1] && 
+                  st_values[1] < self.base_state.compass_config.as_ref().unwrap().calibration.st_upper[1] &&
+                  st_values[2] > self.base_state.compass_config.as_ref().unwrap().calibration.st_lower[2] && 
+                  st_values[2] < self.base_state.compass_config.as_ref().unwrap().calibration.st_upper[2];
         
         // Limpiar bit de self-test si es necesario
-        if config.compass_type != CompassType::AK09911 && 
-           config.compass_type != CompassType::AK09912 &&
-           config.compass_type != CompassType::AK09916 {
-            self.write_secondary_i2c(SecondaryI2cChannel::Slave1, config.compass_i2c_addr, ak_reg::ASTC, 0)?;
+        if self.base_state.compass_config.as_ref().unwrap().compass_type != CompassType::AK09911 && 
+           self.base_state.compass_config.as_ref().unwrap().compass_type != CompassType::AK09912 &&
+           self.base_state.compass_config.as_ref().unwrap().compass_type != CompassType::AK09916 {
+            self.write_secondary_i2c(SecondaryI2cChannel::Slave3, self.base_state.compass_config.as_ref().unwrap().compass_i2c_addr, ak_reg::ASTC, 0)?;
         }
         
         // Volver a modo power down
-        self.write_secondary_i2c(SecondaryI2cChannel::Slave1, config.compass_i2c_addr, mode_reg, ak_val::POWER_DOWN)?;
+        self.write_secondary_i2c(SecondaryI2cChannel::Slave3, self.base_state.compass_config.as_ref().unwrap().compass_i2c_addr, mode_reg, ak_val::POWER_DOWN)?;
         
         // Restaurar configuración de esclavos
         self.write_regs_raw(slave_reg::I2C_SLV0_CTRL, &[saved_slv_ctrl[0]])?;
