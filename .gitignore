@@ -1,0 +1,70 @@
+# Generated files by Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo lock file (remove this line if it's a binary project, keep it for libraries)
+Cargo.lock
+
+# Generated documentation
+/doc/
+
+# IDE specific files
+.vscode/
+.idea/
+*.iml
+*.swp
+*~
+.DS_Store
+
+# Debug files
+debug/
+
+# Profile files
+profile/
+
+# Compiled dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Compiled static libraries
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+
+# Remove cargo config and environment specific files
+.cargo/config.toml
+.cargo/config
+.envrc
+.env
+
+# Examples compiled output
+examples/**/target/
+
+# Test files
+tests/**/target/
+
+# Dependencies that might be downloaded
+vendor/
+
+# Log files
+*.log
+
+# Embedded development specific
+*.elf
+*.bin
+
+# Hardware specific
+.probe.toml
+Embed.toml
+Arduino_ICM20948_DMP_Full-Function/
+NOTAS.txt
+USE.md

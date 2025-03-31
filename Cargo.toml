@@ -1,0 +1,46 @@
+[package]
+name = "icm20948-rs"
+version = "0.1.0"
+edition = "2021"
+authors = ["Sergio Perez <sergio@pereznus.es>"]
+description = "Rust driver for InvenSense ICM20948 IMU sensor"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/serper/icm20948-rs"
+readme = "README.md"
+keywords = ["embedded", "sensor", "accelerometer", "gyroscope", "imu"]
+categories = ["embedded", "hardware-support", "no-std"]
+
+[dependencies]
+embedded-hal = "0.2.7"
+# Mover dependencias opcionales aquí
+plotters = { version = "0.3", optional = true }
+crossterm = { version = "0.25", optional = true }
+# linux-embedded-hal para soporte de Linux (opcional para la biblioteca)
+linux-embedded-hal = { version = "0.3", optional = true }
+
+[dev-dependencies]
+# Para los ejemplos de Linux (no opcionales)
+linux-embedded-hal = "0.3"
+ctrlc = "3.4.0"    # Para manejar la señal Ctrl+C
+
+[features]
+default = []
+std = []           # Característica para habilitar funcionalidades de std
+linux = ["linux-embedded-hal"] # Nueva característica para soporte de Linux
+# Actualizar la feature de plotting para incluir linux-embedded-hal
+plotting = ["plotters", "crossterm", "linux-embedded-hal", "linux"]
+
+[[example]]
+name = "linux_basic"
+required-features = []
+
+[[example]]
+name = "linux_advanced"
+required-features = []
+
+[[example]]
+name = "linux_realtime_plot"
+required-features = ["plotting"]
+
+[package.metadata.docs.rs]
+all-features = true
