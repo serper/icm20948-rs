@@ -15,55 +15,11 @@ use std::thread;
 use std::io::{Write, Read};
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::sync::mpsc;
+use std::sync::RwLock;
+use once_cell::sync::Lazy;
 
-#[derive(Debug)]
-struct FooterInfo {
-    raw: u16,
-    high_flags: u8,  // bits 12–15
-    mid_flags: u8,   // bits 4–11
-    low_flags: u8,   // bits 0–3
-}
-
-impl FooterInfo {
-    fn from_raw(raw: u16) -> Self {
-        let high_flags = ((raw >> 12) & 0x0F) as u8;
-        let mid_flags = ((raw >> 4) & 0xFF) as u8;
-        let low_flags = (raw & 0x0F) as u8;
-        FooterInfo {
-            raw,
-            high_flags,
-            mid_flags,
-            low_flags,
-        }
-    }
-
-    fn describe(&self) {
-        println!("Footer: 0x{:04X}", self.raw);
-        println!("  High flags (15-12):  {:04b} → {}", self.high_flags, match self.high_flags {
-            0x7 => "Fusión completa (Gyro+Accel+Mag)",
-            0x4 => "Fusión parcial (Gyro+Accel)",
-            0x3 => "Solo Gyro o fallback",
-            _ => "Desconocido o reservado",
-        });
-
-        println!("  Mid flags (11-4):     {:08b}", self.mid_flags);
-        println!("  Low flags (3-0):      {:04b} → {}", self.low_flags, match self.low_flags {
-            0x2 => "Código especial / quizás 'usable'",
-            0x0 => "Sin precisión reportada",
-            _ => "Desconocido",
-        });
-    }
-
-    fn fusion_status_description(high: u8, low: u8) -> &'static str {
-        match (high, low) {
-            (0x7, 0x2) => "✅ Fusión completa (9DOF)",
-            (0x4, 0x0..=0x4) => "🟡 Fusión sin magnetómetro",
-            (0x1, _) => "🔴 Sin fusión o inicializando",
-            (0x2, _) => "🟠 Parcial o incierto",
-            _ => "❓ Estado desconocido",
-        }
-    }
-}
+// Variable global para los datos de calibración
+static CALIBRATION_DATA: Lazy<RwLock<[i32; 9]>> = Lazy::new(|| RwLock::new([0; 9]));
 
 fn main() {
     println!("ICM20948 - Ejemplo avanzado (DMP)");
@@ -72,37 +28,21 @@ fn main() {
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
 
-    // Recurso que necesitarás liberar al terminar
-    let dmp_device_for_cleanup = Arc::new(Mutex::new(None::<icm20948_rs::dmp::DmpDriverIcm20948<I2cdev, Delay>>));
-    let dmp_device_cleanup_ref = dmp_device_for_cleanup.clone();
-
     let cleanup = move || {
-        if let Ok(mut device) = dmp_device_cleanup_ref.lock() {
-            if let Some(ref mut dmp_device) = *device {
-                // Guardar en un fichero los datos de calibración
-                let mut calibration_data = [0; 36]; // 9 * 4 bytes
-                calibration_data[0..3].copy_from_slice(&dmp_device.get_bias_acc().unwrap_or_else(|_| [0; 3]));
-                calibration_data[3..6].copy_from_slice(&dmp_device.get_bias_gyr().unwrap_or_else(|_| [0; 3]));
-                calibration_data[6..9].copy_from_slice(&dmp_device.get_bias_cmp().unwrap_or_else(|_| [0; 3]));
-
-                // Guardar en un fichero los datos de calibración
-                if let Err(e) = std::fs::File::create("mpucal.dat").and_then(|mut file| {
-                    let calibration_data_bytes = bytemuck::cast_slice(&calibration_data);
-                    file.write_all(calibration_data_bytes)
-                }) {
-                    eprintln!("Error al guardar datos de calibración: {:?}", e);
-                } else {
-                    println!("Datos de calibración guardados en mpucal.dat");
-                    print!("Datos de calibración: ");
-                    for i in 0..9 {
-                        print!("{:?} ", calibration_data[i]);
-                    }
-                    println!();
+        if let Ok(calibration_data) = CALIBRATION_DATA.read() {
+            // Guardar en un fichero los datos de calibración
+            if let Err(e) = std::fs::File::create("mpucal.dat").and_then(|mut file| {
+                let calibration_data_bytes = bytemuck::cast_slice(&*calibration_data);
+                file.write_all(calibration_data_bytes)
+            }) {
+                eprintln!("Error al guardar datos de calibración: {:?}", e);
+            } else {
+                println!("Datos de calibración guardados en mpucal.dat");
+                print!("Datos de calibración: ");
+                for i in 0..9 {
+                    print!("{:?} ", calibration_data[i]);
                 }
-
-                // Deshabilitar FIFO y DMP antes de liberar el recurso
-                dmp_device.dmp_fifo_enable(false).unwrap_or_else(|_| eprintln!("Error al deshabilitar FIFO"));
-                dmp_device.enable_dmp(false).unwrap_or_else(|_| eprintln!("Error al deshabilitar DMP"));
+                println!();
             }
         }
     };
@@ -180,10 +120,10 @@ fn main() {
     // });
 
     // Configurar sensores y FIFO
-    dmp_device.enable_dmp_sensor(Sensor::RawAccelerometer, true).unwrap_or_else(|_| eprintln!("Error al habilitar el sensor Accel"));
+    dmp_device.enable_dmp_sensor(Sensor::Accelerometer, true).unwrap_or_else(|_| eprintln!("Error al habilitar el sensor Accel"));
     // dmp_device.enable_dmp_sensor(Sensor::Gyroscope, true).unwrap_or_else(|_| eprintln!("Error al habilitar el sensor Gyro"));
     // dmp_device.enable_dmp_sensor(Sensor::MagneticFieldUncalibrated, true).unwrap_or_else(|_| eprintln!("Error al habilitar el sensor MagneticFieldUncalibrated"));
-    dmp_device.enable_dmp_sensor(Sensor::Orientation, true).unwrap_or_else(|_| eprintln!("Error al habilitar el sensor GeomagneticRotationVector"));
+    dmp_device.enable_dmp_sensor(Sensor::Orientation, true).unwrap_or_else(|_| eprintln!("Error al habilitar el sensor Orientation"));
     // dmp_device.enable_dmp_sensor(Sensor::Gravity, true).unwrap_or_else(|_| eprintln!("Error al habilitar el sensor Gravity"));
     // dmp_device.enable_dmp_sensor(Sensor::StepDetector, true).unwrap_or_else(|_| eprintln!("Error al habilitar el sensor StepDetector"));
     
@@ -198,18 +138,23 @@ fn main() {
     // Cargar datos de calibración si existen en un fichero: mpucal.dat
     // Si existe cargar los datos de calibración consistente en 9 datos de 32 bits (i32)
     // Abrir fichero mpucal.dat y leer los datos
-    let mut calibration_data = [0; 9];
+    let mut calibration_data = [0; 36];
+    
     if let Ok(mut file) = std::fs::File::open("mpucal.dat") {
         if let Ok(size) = file.read(&mut calibration_data) {
             if size == 36 { // 9 * 4 bytes
                 let bias_acc = bytemuck::cast_slice::<u8, i32>(&calibration_data[0..12]);
                 let bias_gyr = bytemuck::cast_slice::<u8, i32>(&calibration_data[12..24]);
                 let bias_cmp = bytemuck::cast_slice::<u8, i32>(&calibration_data[24..36]);
-
+                
                 dmp_device.set_bias_acc(&bias_acc.try_into().unwrap()).unwrap_or_else(|_| eprintln!("Error al establecer el bias de aceleración"));
                 dmp_device.set_bias_gyr(&bias_gyr.try_into().unwrap()).unwrap_or_else(|_| eprintln!("Error al establecer el bias de giroscopio"));
                 dmp_device.set_bias_cmp(&bias_cmp.try_into().unwrap()).unwrap_or_else(|_| eprintln!("Error al establecer el bias de magnetómetro"));
                 println!("Datos de calibración cargados correctamente desde mpucal.dat");
+                print!("Datos de calibración: ");
+                for i in 0..9 {
+                    print!("{:?} ", calibration_data[i]);
+                }
             } else {
                 eprintln!("Error: Tamaño de datos de calibración incorrecto: {}", size);
             }
@@ -219,29 +164,29 @@ fn main() {
     } else {
         eprintln!("No se encontró el fichero de calibración, usando valores por defecto");
     }   
-
+    
     dmp_device.dmp_fifo_enable(true).unwrap_or_else(|_| eprintln!("Error al habilitar FIFO"));
     dmp_device.enable_dmp(true).unwrap_or_else(|_| eprintln!("Error al habilitar DMP"));
     dmp_device.set_fifo_watermark(1024).unwrap_or_else(|_| eprintln!("Error al configurar el watermark del FIFO"));
     dmp_device.reset_dmp().unwrap_or_else(|_| eprintln!("Error al resetear el DMP"));
     dmp_device.reset_fifo().unwrap_or_else(|_| eprintln!("Error al resetear el FIFO"));
-
+    
     // Envolver el dispositivo DMP en un Arc<Mutex<>> para compartirlo entre threads
     let dmp_device = Arc::new(Mutex::new(dmp_device));
-
+    
     // Canal para comunicar el thread de lectura con el principal
     let (tx, rx) = mpsc::channel();
-
+    
     // Clonar las referencias para el thread
     let thread_running = running.clone();
     let thread_dmp_device = dmp_device.clone();
-
+    
     // Crear thread para leer datos del DMP
     let dmp_thread = std::thread::spawn(move || {
         let mut dmp_state = dmp_fifo::DmpFifoState::default();
         let mut last_successful_read = std::time::Instant::now();
         let read_timeout = Duration::from_millis(500); // Timeout para evitar bloqueo en lectura
-
+        
         while thread_running.load(Ordering::SeqCst) {
             // Usar un scope para limitar el tiempo que se mantiene el mutex bloqueado
             let read_result = {
@@ -265,7 +210,7 @@ fn main() {
                     }
                 }
             };
-
+            
             // Comprobar resultado de lectura
             match read_result {
                 Ok(_) => {
@@ -294,12 +239,14 @@ fn main() {
             thread::sleep(Duration::from_millis(10));
         }
     });
-
+    
     // Procesar datos recibidos en el canal
     let mut last_display_time = std::time::Instant::now();
     let display_interval = Duration::from_millis(200);
     let mut last_data_time = std::time::Instant::now();
     let data_timeout = Duration::from_secs(3); // Tiempo para considerar que hay un problema de datos
+    let calibration_update_interval = Duration::from_secs(30);
+    let mut last_calibration_update = std::time::Instant::now();
 
     while running.load(Ordering::SeqCst) {
         // Intentar recibir datos con timeout corto para responder rápido a señales de parada
@@ -342,14 +289,14 @@ fn main() {
                     }
                     if let Some(quaternion) = dmp_state.quaternion9.as_ref() {
                         println!("Quaternion9: w: {:?}, x: {:?}, y: {:?}, z: {:?}", quaternion.w, quaternion.x, quaternion.y, quaternion.z);
-                        let euler_angles = icm20948_rs::dmp_fifo::quaternion_to_euler(quaternion);
-                        let mut roll = euler_angles[0] + 180.0;
-                        let pitch = -euler_angles[1];
-                        let yaw = (-euler_angles[2] + 360.0) % 360.0;
-                        if roll > 180.0 {
-                            roll -= 360.0;
-                        }
-                        println!("Euler Angles: roll: {:?}, pitch: {:?}, yaw: {:?}", roll, pitch, yaw);
+                        let q_ref = icm20948_rs::dmp_fifo::Quaternion { w: 0.0, x: 0.0, y: 1.0, z: 0.0, heading_accuracy_deg: None };
+                        let rotated_quat = icm20948_rs::dmp_fifo::rotate_quaternion(quaternion, &q_ref);
+                        let euler_angles = icm20948_rs::dmp_fifo::quaternion_to_angles_lockless(&rotated_quat);
+                        let roll = euler_angles[0];
+                        let pitch = euler_angles[1];
+                        let yaw = euler_angles[2];
+                        
+                        println!("Euler Angles: roll: {:?}, pitch: {:?}, yaw: {:?} Accuracy: {:?}", roll, pitch, yaw, quaternion.heading_accuracy_deg);
                     }
                     if let Some(quaternion) = dmp_state.geomag_data.as_ref() {
                         println!("Geomag: w: {:?}, x: {:?}, y: {:?}, z: {:?}", quaternion.w, quaternion.x, quaternion.y, quaternion.z);
@@ -360,17 +307,33 @@ fn main() {
                         if roll > 180.0 {
                             roll -= 360.0;
                         }
-                        println!("Euler Angles: roll: {:?}, pitch: {:?}, yaw: {:?}", roll, pitch, yaw);
+                        println!("Euler Angles: roll: {:?}, pitch: {:?}, yaw: {:?} Accuracy: {:?}", roll, pitch, yaw, quaternion.heading_accuracy_deg);
                     }
                     print!("Header: {:X?} Header2: {:X?} Size: {:?} Count: {:?} Footer: {:016b} Accuracy Accel: {:?}, Gyro: {:?}, Compass: {:?}\n",
                         dmp_state.header, dmp_state.header2, dmp_state.packet_size, dmp_state.count, dmp_state.footer, dmp_state.accel_accuracy, dmp_state.gyro_accuracy, dmp_state.compass_accuracy);
                     
-                    let footer = FooterInfo::from_raw(dmp_state.footer);
-                    println!("Footer: 0x{:04X} → {}", dmp_state.footer, FooterInfo::fusion_status_description(footer.high_flags, footer.low_flags));
-                    // footer.describe();
-                    println!();
                     print!("Packet: {:X?}\n", dmp_state.packet);
                     last_display_time = std::time::Instant::now();
+                }
+
+                // Actualizar periódicamente los datos de calibración
+                if last_calibration_update.elapsed() >= calibration_update_interval {
+                    // Obtener los datos de calibración actuales
+                    if let Ok(mut device) = dmp_device.try_lock() {
+                        if let (Ok(bias_acc), Ok(bias_gyr), Ok(bias_cmp)) = (
+                            device.get_bias_acc(),
+                            device.get_bias_gyr(),
+                            device.get_bias_cmp()
+                        ) {
+                            // Actualizar la variable global
+                            if let Ok(mut calibration_data) = CALIBRATION_DATA.write() {
+                                calibration_data[0..3].copy_from_slice(&bias_acc);
+                                calibration_data[3..6].copy_from_slice(&bias_gyr);
+                                calibration_data[6..9].copy_from_slice(&bias_cmp);
+                            }
+                        }
+                    }
+                    last_calibration_update = std::time::Instant::now();
                 }
             },
             Err(mpsc::RecvTimeoutError::Timeout) => {

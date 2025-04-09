@@ -7,6 +7,8 @@ use crate::types::{bits, dmp_header, dmp_header2, dmp_packet_bytes, dmp_packet_b
 use crate::interface::Interface;
 use embedded_hal::blocking::delay::DelayMs;
 use core::fmt::Debug;
+
+pub const PI: f32 = 3.14159265358979323846;
 // extern crate alloc;
 // use alloc::vec::Vec;
 
@@ -373,6 +375,23 @@ fn normalize_quaternion(w: f32, x: f32, y: f32, z: f32) -> (f32, f32, f32, f32) 
     }
 }
 
+/// Rotaciona un cuaternión a partir de un cuaternión de referencia
+/// # Arguments
+/// * `q` - Cuaternión a rotacionar
+/// * `q_ref` - Cuaternión de referencia
+/// 
+/// # Returns
+/// Cuaternión rotacionado
+
+pub fn rotate_quaternion(q: &Quaternion, q_ref: &Quaternion) -> Quaternion {
+    let w = q.w * q_ref.w - q.x * q_ref.x - q.y * q_ref.y - q.z * q_ref.z;
+    let x = q.w * q_ref.x + q.x * q_ref.w + q.y * q_ref.z - q.z * q_ref.y;
+    let y = q.w * q_ref.y - q.x * q_ref.z + q.y * q_ref.w + q.z * q_ref.x;
+    let z = q.w * q_ref.z + q.x * q_ref.y - q.y * q_ref.x + q.z * q_ref.w;
+    
+    Quaternion { w, x, y, z, heading_accuracy_deg: None }
+}
+
 /// Calcula los ángulos de Euler (roll, pitch, yaw) a partir de un cuaternión
 ///
 /// # Arguments
@@ -398,6 +417,60 @@ pub fn quaternion_to_euler(quaternion: &Quaternion) -> [f32; 3] {
         pitch * rad_to_deg,
         yaw * rad_to_deg
     ]
+}
+
+// fn quaternion_to_euler_deg(q: &Quaternion) -> (f32, f32, f32) {
+//     let sinr_cosp = 2.0 * (q.w * q.x + q.y * q.z);
+//     let cosr_cosp = 1.0 - 2.0 * (q.x * q.x + q.y * q.y);
+//     let roll = sinr_cosp.atan2(cosr_cosp).to_degrees();
+
+//     let sinp = 2.0 * (q.w * q.y - q.z * q.x);
+//     let pitch = if sinp.abs() >= 1.0 {
+//         sinp.signum() * 90.0 // Gimbal lock
+//     } else {
+//         sinp.asin().to_degrees()
+//     };
+
+//     let siny_cosp = 2.0 * (q.w * q.z + q.x * q.y);
+//     let cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
+//     let yaw = siny_cosp.atan2(cosy_cosp).to_degrees();
+
+//     (roll, pitch, yaw)
+// }
+
+pub fn quaternion_to_angles_lockless(q: &Quaternion) -> [f32; 3] {
+    // Calculamos la "gravedad" proyectada desde el cuaternión
+    let gx = q.w * q.y - q.x * q.z;
+    let gy = -(q.y * q.z + q.w * q.x);
+    let gz = 0.5 - q.w * q.w - q.z * q.z;
+
+    // Roll y pitch desde el vector de gravedad
+    let roll_rad = f32::atan2(gx, (gy * gy + gz * gz).sqrt());
+    let pitch_rad = -f32::atan2(gy, gz) - PI;
+
+    // Yaw desde el cuaternión (como siempre)
+    let yaw_rad = f32::atan2(q.w * q.z + q.x * q.y, 0.5 - q.y * q.y - q.z * q.z);
+
+    // Conversión a grados
+    let mut roll_deg = roll_rad.to_degrees();
+    let mut pitch_deg = pitch_rad.to_degrees();
+    let mut yaw_deg = -yaw_rad.to_degrees() + 360.0; // Ajuste de 360 grados
+
+    // Corrección cuando el sensor está boca abajo
+    if gz > 0.0 {
+        if roll_deg > 0.0 {
+            roll_deg = 180.0 - roll_deg;
+        } else {
+            roll_deg = -180.0 - roll_deg;
+        }
+    }
+
+    // Ajustes para mantener los valores entre [-180, 180]
+    roll_deg = if roll_deg < -180.0 { roll_deg + 360.0 } else { roll_deg };
+    pitch_deg = if pitch_deg < -180.0 { pitch_deg + 360.0 } else { pitch_deg };
+    yaw_deg = if yaw_deg > 360.0 { yaw_deg - 360.0 } else { yaw_deg };
+
+    [roll_deg, pitch_deg, yaw_deg]
 }
 
 /// Procesa los datos de gravedad del FIFO
