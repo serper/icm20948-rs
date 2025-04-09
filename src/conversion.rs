@@ -80,10 +80,12 @@ pub fn gyro_raw_to_dps(raw: [i16; 3], scale: GyroFullScale) -> [f32; 3] {
 /// # Returns
 /// Temperatura en grados Celsius
 pub fn temp_raw_to_celsius(raw: i16) -> f32 {
-    // La fórmula se toma del datasheet del ICM20948:
-    // Temp °C = ((TEMP_OUT - RoomTemp_Offset)/Temp_Sensitivity) + 21°C
-    // Para el ICM20948: RoomTemp_Offset=0, Temp_Sensitivity=333.87
-    (raw as f32 - 21.0) / 333.87 + 21.0
+    // Probemos la fórmula original del datasheet
+    // Temp °C = (TEMP_OUT / Temp_Sensitivity) + 21°C
+    // donde Temp_Sensitivity = 333.87
+    
+    // Fórmula simplificada que suele funcionar con la mayoría de MPUs
+    (raw as f32) / 333.87 + 21.0
 }
 
 /// Convierte datos de cuaternión DMP a valores normalizados de cuaternión

@@ -17,6 +17,8 @@ plotters = { version = "0.3", optional = true }
 crossterm = { version = "0.25", optional = true }
 # linux-embedded-hal para soporte de Linux (opcional para la biblioteca)
 linux-embedded-hal = { version = "0.3", optional = true }
+signal-hook = "0.3.17"
+bytemuck = "1.22.0"
 
 [dev-dependencies]
 # Para los ejemplos de Linux (no opcionales)
@@ -32,15 +34,18 @@ plotting = ["plotters", "crossterm", "linux-embedded-hal", "linux"]
 
 [[example]]
 name = "linux_basic"
-required-features = []
+required-features = ["linux"]
 
 [[example]]
 name = "linux_advanced"
-required-features = []
+required-features = ["linux"]
 
 [[example]]
 name = "linux_realtime_plot"
-required-features = ["plotting"]
+required-features = ["plotting", "linux"]
 
 [package.metadata.docs.rs]
 all-features = true
+
+[profile.dev]
+debug = true

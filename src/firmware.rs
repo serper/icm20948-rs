@@ -1,13 +1,7 @@
 use crate::device::{Icm20948, Icm20948Error};
 use crate::interface::Interface;
+use crate::types;
 use embedded_hal::blocking::delay::DelayMs;
-
-/// Maximum size for serial read operations
-pub const INV_MAX_SERIAL_READ: usize = 16;
-/// Maximum size for serial write operations
-pub const INV_MAX_SERIAL_WRITE: usize = 16;
-/// DMP firmware starting address
-pub const DMP_LOAD_START: u16 = 0x90;
 
 /// Loads the DMP firmware from SRAM
 /// 
@@ -38,7 +32,7 @@ where
     let mut remaining_size = firmware_data.len();
 
     while remaining_size > 0 {
-        let write_size = remaining_size.min(INV_MAX_SERIAL_WRITE);
+        let write_size = remaining_size.min(types::INV_MAX_SERIAL_WRITE);
         let adjusted_write_size = if (mem_addr & 0xff) + write_size as u16 > 0x100 {
             // Moved across a bank
             ((mem_addr & 0xff) + write_size as u16 - 0x100) as usize
@@ -62,10 +56,10 @@ where
     let mut data_index = 0;
     let mut mem_addr = load_addr;
     let mut remaining_size = firmware_data.len();
-    let mut data_cmp = [0u8; INV_MAX_SERIAL_READ];
+    let mut data_cmp = [0u8; types::INV_MAX_SERIAL_READ];
 
     while remaining_size > 0 {
-        let read_size = remaining_size.min(INV_MAX_SERIAL_READ);
+        let read_size = remaining_size.min(types::INV_MAX_SERIAL_READ);
         let adjusted_read_size = if (mem_addr & 0xff) + read_size as u16 > 0x100 {
             // Moved across a bank
             ((mem_addr & 0xff) + read_size as u16 - 0x100) as usize
@@ -108,7 +102,7 @@ where
     Icm20948Error: From<E>,
 {
     // Usar directamente el firmware DMP3 del módulo
-    load_firmware(device, crate::dmp3_firmware::DMP3_FIRMWARE, DMP_LOAD_START)
+    load_firmware(device, crate::dmp3_firmware::DMP3_FIRMWARE, types::DMP_LOAD_START)
 }
 
 /// Gets the DMP start address

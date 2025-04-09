@@ -1,4 +1,4 @@
-use icm20948_rs::{self, AccelFullScale, GyroFullScale, compass, selftest, controls, register::registers::bank0, register::registers::bank2, device::CHIP_LP_ENABLE};
+use icm20948_rs::{self, AccelFullScale, GyroFullScale, compass, selftest, controls, device::CHIP_LP_ENABLE};
 use linux_embedded_hal::{Delay, I2cdev};
 use std::thread;
 use std::time::Duration;
@@ -55,15 +55,10 @@ fn main() {
         }
     }
     
-    // Activar magnetómetro
+    // Intentar activar el magnetómetro
+    println!("Intentando activar magnetómetro...");
     if let Err(e) = device.setup_compass(compass::CompassType::AK09916, 0x0C) {
         eprintln!("Error al activar el magnetómetro: {:?}", e);
-    } else {
-        if device.compass_is_connected() {
-            println!("Magnetómetro conectado correctamente");
-        } else {
-            eprintln!("Error: Magnetómetro no conectado");
-        }
     }
 
     // Configurar tasas de muestreo
@@ -91,7 +86,9 @@ fn main() {
         eprintln!("Error al configurar la escala del giroscopio: {:?}", e);
     }
 
-    device.set_chip_power_state(CHIP_LP_ENABLE, 0);
+    if let Err(e) = device.set_chip_power_state(CHIP_LP_ENABLE, 0) {
+        eprintln!("Error al configurar el estado de energía del chip: {:?}", e);
+    }
     
     // Calibración de sensores
     if let Err(e) = selftest::calibrate(&mut device, true) {
@@ -100,9 +97,11 @@ fn main() {
     }
     println!("Sensores calibrados correctamente");
 
-    // Configurar el magnetómetro
-    if let Err(e) = device.set_compass_mode(compass::compass_rd::MODE_CONT_100HZ) {
-        eprintln!("Error al configurar el modo del magnetómetro: {:?}", e);
+    // Intentar configurar el modo del magnetómetro si está conectado
+    if device.compass_is_connected() {
+        if let Err(e) = device.set_compass_mode(compass::compass_rd::MODE_CONT_100HZ) {
+            eprintln!("Error al configurar el modo del magnetómetro: {:?}", e);
+        }
     }
     // // Compass self-test
     // if let Err(e) = device.check_compass_self_test() {
@@ -110,54 +109,6 @@ fn main() {
     // } else {
     //     println!("Self-test del magnetómetro exitoso");
     // }
-
-    // // Guardar la configuración actual del sensor
-    // let orig_pwr_mgmt_1 = match device.read_reg::<bank0::Bank>(bank0::PWR_MGMT_1) {
-    //     Ok(value) => value,
-    //     Err(e) => {
-    //         eprintln!("Error al leer PWR_MGMT_1: {:?}", e);
-    //         return;
-    //     }
-    // };
-    // let orig_user_ctrl = match device.read_reg::<bank0::Bank>(bank0::USER_CTRL) {
-    //     Ok(value) => value,
-    //     Err(e) => {
-    //         eprintln!("Error al leer USER_CTRL: {:?}", e);
-    //         return;
-    //     }
-    // };
-    // let orig_accel_config_1 = match device.read_reg::<bank2::Bank>(bank2::ACCEL_CONFIG_1) {
-    //     Ok(value) => value,
-    //     Err(e) => {
-    //         eprintln!("Error al leer ACCEL_CONFIG_1: {:?}", e);
-    //         return;
-    //     }
-    // };
-    // let orig_accel_config_2 = match device.read_reg::<bank2::Bank>(bank2::ACCEL_CONFIG_2) {
-    //     Ok(value) => value,
-    //     Err(e) => {
-    //         eprintln!("Error al leer ACCEL_CONFIG_2: {:?}", e);
-    //         return;
-    //     }
-    // };
-    // let orig_gyro_config_1 = match device.read_reg::<bank2::Bank>(bank2::GYRO_CONFIG_1) {
-    //     Ok(value) => value,
-    //     Err(e) => {
-    //         eprintln!("Error al leer GYRO_CONFIG_1: {:?}", e);
-    //         return;
-    //     }
-    // };
-    // let orig_gyro_config_2 = match device.read_reg::<bank2::Bank>(bank2::GYRO_CONFIG_2) {
-    //     Ok(value) => value,
-    //     Err(e) => {
-    //         eprintln!("Error al leer GYRO_CONFIG_2: {:?}", e);
-    //         return;
-    //     }
-    // };
-
-    // // Imprimir la configuración original en binario
-    // println!("Configuración: PWR_MGMT_1: {:08b}, USER_CTRL: {:08b}, ACCEL_CONFIG_1: {:08b}, ACCEL_CONFIG_2: {:08b}, GYRO_CONFIG_1: {:08b}, GYRO_CONFIG_2: {:08b}", 
-    //     orig_pwr_mgmt_1, orig_user_ctrl, orig_accel_config_1, orig_accel_config_2, orig_gyro_config_1, orig_gyro_config_2);
 
     // Leer datos continuamente hasta que se presione Ctrl+C
     println!("Leyendo datos. Presiona Ctrl+C para detener...");
@@ -175,7 +126,7 @@ fn main() {
             Err(e) => eprintln!("Error al leer giroscopio: {:?}", e),
         }
         
-        // Leer y mostrar datos del magnetómetro en microteslas
+        // Intentar leer datos del magnetómetro
         match device.read_compass(100) {
             Ok(mag) => println!("Magnetómetro: x={:.2}µT, y={:.2}µT, z={:.2}µT", mag.x, mag.y, mag.z),
             Err(e) => eprintln!("Error al leer magnetómetro: {:?}", e),

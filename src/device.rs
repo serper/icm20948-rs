@@ -1,9 +1,8 @@
 use crate::interface::Interface;
-use crate::types::{GyroFullScale, AccelFullScale, data_defs};
+use crate::types::{self, data_defs, AccelFullScale, GyroFullScale};
 
 // Actualizar importación de registros
-use crate::register::{registers::RegisterBank, registers::bank0, registers::bank1, registers::bank2, registers::bank3, dmp};
-use crate::dmp::output_mask2;
+use crate::register::{registers::RegisterBank, registers::bank0, registers::bank2, registers::bank3, dmp};
 use embedded_hal::blocking::delay::DelayMs;
 use crate::controls::AccelData;
 use crate::base::{SystemTimeSource, TimeSource};
@@ -29,12 +28,15 @@ pub struct Icm20948<I, D> {
 pub enum Icm20948Error {
     InterfaceError,
     InvalidParameter,
+    FirmwareLoadError,
     FirmwareVerificationFailed,
     WhoAmIError,
     InvalidOperation,
     Device,
+    DeviceNotFound,
     Timeout,
     Overflow,
+    Other,
     // Add other error types as needed
 }
 
@@ -74,6 +76,7 @@ pub struct BaseState {
     pub pwr_mgmt_1: u8,
     pub pwr_mgmt_2: u8,
     pub last_bank_selected: u8,
+    pub last_mems_bank_selected: u8,
     pub gyro_fullscale: GyroFullScale,
     pub accel_fullscale: AccelFullScale,
     pub accel_divider: u16,
@@ -82,6 +85,8 @@ pub struct BaseState {
     pub order: u8,
     pub dmp_enabled: bool,
     pub batch_mode: bool,
+    pub enabled_sensors_0: u32,
+    pub enabled_sensors_1: u32,
 }
 
 impl Default for BaseState {
@@ -98,7 +103,8 @@ impl Default for BaseState {
             accel_half_res: false,
             pwr_mgmt_1: 0,
             pwr_mgmt_2: 0,
-            last_bank_selected: 0,
+            last_bank_selected: 0xFF,
+            last_mems_bank_selected: 0xFF,
             gyro_fullscale: GyroFullScale::default(),
             accel_fullscale: AccelFullScale::default(),
             accel_divider: 0,
@@ -107,6 +113,8 @@ impl Default for BaseState {
             order: 0,
             dmp_enabled: false,
             batch_mode: false,
+            enabled_sensors_0: 0,
+            enabled_sensors_1: 0,
         }
     }
 }
@@ -134,6 +142,7 @@ pub const INV_NEEDS_PRESSURE: u32 = 0x10000040;
 // Modos de operación
 pub const CHIP_LOW_NOISE_ICM20948: u8 = 0;
 pub const CHIP_LOW_POWER_ICM20948: u8 = 1;
+pub const CHIP_LOW_POWER_WOI2C_ICM20948: u8 = 2;
 
 // Constante para divider de FIFO
 pub const FIFO_DIVIDER: u8 = 19;  // 1125Hz/20 = 56.25Hz
@@ -242,7 +251,7 @@ where
             .map_err(|e: E| Icm20948Error::from_error(e))?;
 
         // Restaurar el estado de LP_ENABLE si es necesario
-        if (self.base_state.wake_state & CHIP_LP_ENABLE) == 0 {
+        if (power_state & CHIP_LP_ENABLE) == 0 {
             self.set_chip_power_state(CHIP_LP_ENABLE, 1)?;
         }
         
@@ -272,7 +281,7 @@ where
             .map_err(|e| Icm20948Error::from_error(e))?;
 
         // Restaurar el estado de LP_ENABLE si es necesario
-        if (self.base_state.wake_state & CHIP_LP_ENABLE) == 0 {
+        if (power_state & CHIP_LP_ENABLE) == 0 {
             self.set_chip_power_state(CHIP_LP_ENABLE, 1)?;
         }
 
@@ -302,7 +311,7 @@ where
             .map_err(|e| Icm20948Error::from_error(e))?;
 
         // Restaurar el estado de LP_ENABLE si es necesario
-        if (self.base_state.wake_state & CHIP_LP_ENABLE) == 0 {
+        if (power_state & CHIP_LP_ENABLE) == 0 {
             self.set_chip_power_state(CHIP_LP_ENABLE, 1)?;
         }
 
@@ -331,6 +340,11 @@ where
         self.interface.write_reg(reg, values)
             .map_err(|e| Icm20948Error::from_error(e))?;
             
+        // Restaurar el estado de LP_ENABLE si es necesario
+        if (power_state & CHIP_LP_ENABLE) == 0 {
+            self.set_chip_power_state(CHIP_LP_ENABLE, 1)?;
+        }
+
         Ok(())
     }
     
@@ -389,9 +403,9 @@ where
     /// Método para comprobar si está activado el batch mode leyendo el registro de control de salida 2
     pub fn get_batch_mode_status(&mut self) -> Result<bool, Icm20948Error> {
         let mut reg = [0u8; 2];
-        self.read_mems(dmp::DATA_OUT_CTL2, &mut reg)
+        self.read_mems(dmp::data_output_control::DATA_OUT_CTL2, &mut reg)
                 .map_err(|_| Icm20948Error::InterfaceError)?;
-        Ok((u16::from_be_bytes(reg) & output_mask2::BATCH_MODE_EN) != 0)
+        Ok((u16::from_be_bytes(reg) & dmp::output_mask2::BATCH_MODE_ENABLE) != 0)
     }
 
     /// Método para comrpobar si está activado el batch mode sin leer el registro de control de salida 2
@@ -446,172 +460,94 @@ where
 
     /// Write to DMP memory
     pub fn write_mems(&mut self, mem_addr: u16, data: &[u8]) -> Result<(), Icm20948Error> {
-        let mut result = self.set_chip_power_state(CHIP_AWAKE, 1);
 
-        // Disable LP_EN before writing
-        result = result.and(self.set_chip_power_state(CHIP_LP_ENABLE, 0));
+        // Salvamos el estado de power
+        let power_state = self.base_state.wake_state;
 
-        result = result.and(self.set_bank(0));
-
-        let bank_selected = mem_addr >> 8;
-        if bank_selected != u16::from(self.base_state.last_bank_selected) {
-            result = result.and(self.write_regs_raw(bank0::MEM_BANK_SEL, &[bank_selected as u8])
-                .map_err(|_| Icm20948Error::InterfaceError));
-            if result.is_ok() {
-                self.base_state.last_bank_selected = bank_selected as u8;
-            } else {
-                return result;
-            }
+        // Despertar el chip si es necesario
+        if (power_state & CHIP_AWAKE) == 0 {
+            self.set_chip_power_state(CHIP_AWAKE, 1)?;
+        }
+        
+        // Desactivar CHIP_LP_ENABLE si es necesario
+        if (power_state & CHIP_LP_ENABLE) != 0 {
+            self.set_chip_power_state(CHIP_LP_ENABLE, 0)?;
         }
 
+        
         let mut bytes_written = 0;
-        let mut addr = mem_addr & 0xff;
         let size = data.len();
-
+        
         while bytes_written < size {
             // Set the starting read or write address
-            result = result.and(self.write_regs_raw(bank0::MEM_START_ADDR, &[addr as u8])
-                .map_err(|_| Icm20948Error::InterfaceError));
-            if result.is_err() {
-                return result;
+            let bank_selected = ((mem_addr + bytes_written as u16) >> 8) as u8;
+            if bank_selected != self.base_state.last_mems_bank_selected {
+                self.write_reg::<bank0::Bank>(bank0::MEM_BANK_SEL, bank_selected)?;
+                self.base_state.last_mems_bank_selected = bank_selected;
             }
+            let addr = ((mem_addr + bytes_written as u16) & 0xff) as u8;
+            self.write_reg::<bank0::Bank>(bank0::MEM_START_ADDR, addr)?;
 
-            let this_len = std::cmp::min(16, size - bytes_written);
+            let this_len = std::cmp::min(types::INV_MAX_SERIAL_WRITE, size - bytes_written);
 
             // Write data
-            let mut buffer = Vec::with_capacity(this_len);
-            buffer.extend_from_slice(&data[bytes_written..bytes_written + this_len]);
-            result = result.and(self.write_regs_raw(bank0::MEM_R_W, &buffer)
-                .map_err(|_| Icm20948Error::InterfaceError));
-            if result.is_err() {
-                return result;
-            }
+            let buffer = &data[bytes_written..bytes_written + this_len];
+            self.write_regs::<bank0::Bank>(bank0::MEM_R_W, &buffer[..])?;
 
             bytes_written += this_len;
-            addr += this_len as u16;
         }
 
-        // Enable LP_EN again if we disabled it at beginning of function
-        result = result.and(self.write_regs_raw(bank0::MEM_R_W, &[data[0]]));
+        // Restaurar el estado de LP_ENABLE si es necesario
+        if (self.base_state.wake_state & CHIP_LP_ENABLE) == 0 {
+            self.set_chip_power_state(CHIP_LP_ENABLE, 1)?;
+        }
 
-        result = result.and(self.set_chip_power_state(CHIP_LP_ENABLE, 1));
-
-        result
+        Ok(())
     }
 
     /// Read from DMP memory
     pub fn read_mems(&mut self, mem_addr: u16, data: &mut [u8]) -> Result<(), Icm20948Error> {
-        let mut result = self.set_chip_power_state(CHIP_AWAKE, 1);
+        // Salvamos el estado de power
+        let power_state = self.base_state.wake_state;
 
-        // Disable LP_EN before reading
-        result = result.and(self.set_chip_power_state(CHIP_LP_ENABLE, 0));
-
-        result = result.and(self.set_bank(0));
-
-        let bank_selected = mem_addr >> 8;
-        if bank_selected != u16::from(self.base_state.last_bank_selected) {
-            result = result.and(self.write_regs_raw(bank0::MEM_BANK_SEL, &[bank_selected as u8])
-                .map_err(|_| Icm20948Error::InterfaceError));
-            if result.is_ok() {
-                self.base_state.last_bank_selected = bank_selected as u8;
-            } else {
-                return result;
-            }
+        // Despertar el chip si es necesario
+        if (power_state & CHIP_AWAKE) == 0 {
+            self.set_chip_power_state(CHIP_AWAKE, 1)?;
+        }
+        
+        // Desactivar CHIP_LP_ENABLE si es necesario
+        if (power_state & CHIP_LP_ENABLE) != 0 {
+            self.set_chip_power_state(CHIP_LP_ENABLE, 0)?;
         }
 
         let mut bytes_read = 0;
-        let mut addr = mem_addr & 0xff;
         let size = data.len();
-
+        
         while bytes_read < size {
             // Set the starting read or write address
-            result = result.and(self.write_regs_raw(bank0::MEM_START_ADDR, &[addr as u8])
-                .map_err(|_| Icm20948Error::InterfaceError));
-            if result.is_err() {
-                return result;
+            let bank_selected = ((mem_addr + bytes_read as u16) >> 8) as u8;
+            if bank_selected != self.base_state.last_mems_bank_selected {
+                self.write_reg::<bank0::Bank>(bank0::MEM_BANK_SEL, bank_selected)?;
+                self.base_state.last_mems_bank_selected = bank_selected;
             }
+            let addr = ((mem_addr + bytes_read as u16) & 0xff) as u8;
+            self.write_reg::<bank0::Bank>(bank0::MEM_START_ADDR, addr)?;
 
-            let this_len = std::cmp::min(16, size - bytes_read);
+            let this_len = std::cmp::min(types::INV_MAX_SERIAL_WRITE, size - bytes_read);
 
             // Read data
-            result = result.and(self.read_regs_raw(bank0::MEM_R_W, &mut data[bytes_read..bytes_read + this_len]).map(|_| ()));
-            if result.is_err() {
-                return result;
-            }
+            self.read_regs::<bank0::Bank>(bank0::MEM_R_W, &mut data[bytes_read..bytes_read + this_len])?;
 
             bytes_read += this_len;
-            addr += this_len as u16;
         }
 
-        // Enable LP_EN again if we disabled it at beginning of function
-        result = result.and(self.set_chip_power_state(CHIP_LP_ENABLE, 1));
+        // Restaurar el estado de LP_ENABLE si es necesario
+        if (self.base_state.wake_state & CHIP_LP_ENABLE) == 0 {
+            self.set_chip_power_state(CHIP_LP_ENABLE, 1)?;
+        }
 
-        result
+        Ok(())
     }
-
-    // /// Write a single MEMS register without changing power state
-    // pub fn write_single_mems_reg_core(&mut self, reg: u16, data: u8) -> Result<(), Icm20948Error> {
-    //     let result = self.set_bank((reg >> 8) as u8);
-    //     result.and(self.write_regs_raw(reg & 0xFF as u8, &[data])
-    //         .map_err(|_| Icm20948Error::InterfaceError))
-    // }
-
-    // /// Write a single MEMS register
-    // pub fn write_single_mems_reg(&mut self, reg: u16, data: u8) -> Result<(), Icm20948Error> {
-    //     let mut result = self.set_chip_power_state(CHIP_AWAKE, 1);
-
-    //     result = result.and(self.write_single_mems_reg_core(reg, data));
-
-    //     result
-    // }
-
-    // // Read a single MEMS register
-    // pub fn read_single_mems_reg(&mut self, reg: u16) -> Result<u8, Icm20948Error> {
-    //     let mut result = self.set_chip_power_state(CHIP_AWAKE, 1);
-    //     result = result.and(self.set_bank((reg >> 8) as u8));
-
-    //     let mut data = [0u8; 1];
-    //     result = result.and(self.read_regs(reg, &mut data[0..1])
-    //         .map(|_| ()).map_err(|_| Icm20948Error::InterfaceError));
-
-    //     if result.is_ok() {
-    //         Ok(data[0])
-    //     } else {
-    //         Err(result.err().unwrap())
-    //     }
-    // }
-
-    // /// Read MEMS registers
-    // pub fn read_mems_reg(&mut self, reg: u16, data: &mut [u8]) -> Result<(), Icm20948Error> {
-    //     let mut result = self.set_chip_power_state(CHIP_AWAKE, 1);
-
-    //     result = result.and(self.set_bank((reg >> 8) as u8));
-
-    //     result = result.and(self.read_regs(reg, data)
-    //         .map(|_| ()).map_err(|_| Icm20948Error::InterfaceError));
-
-    //     if result.is_err() {
-    //         return Err(result.err().unwrap());
-    //     }
-
-    //     result
-    // }
-
-    // /// Write MEMS registers
-    // pub fn write_mems_reg(&mut self, reg: u16, data: &[u8]) -> Result<(), Icm20948Error> {
-    //     let mut result = self.set_chip_power_state(CHIP_AWAKE, 1);
-
-    //     result = result.and(self.set_bank((reg >> 8) as u8));
-
-    //     result = result.and(self.write_regs(reg, data)
-    //         .map_err(|_| Icm20948Error::InterfaceError));
-
-    //     if result.is_err() {
-    //         return Err(result.err().unwrap());
-    //     }
-
-    //     result
-    // }
 
     /// Prevent low power mode from being enabled
     pub fn prevent_lpen_control(&mut self) {
@@ -700,6 +636,16 @@ where
         result
     }
 
+    /// Enable or disable the Sleep mode
+    pub fn set_sleep(&mut self, sleep: bool) -> Result<(), Icm20948Error> {
+        if sleep {
+            self.modify_reg::<bank0::Bank,_>(bank0::PWR_MGMT_1, |x|x | bits::SLEEP)?;
+        } else {
+            self.modify_reg::<bank0::Bank,_>(bank0::PWR_MGMT_1, |x|x & !bits::SLEEP)?;
+        }
+        Ok(())
+    }
+
     /// Sleep MEMS
     pub fn sleep_mems(&mut self) -> Result<(), Icm20948Error> {
         let data = 0x7F; // All sensors off
@@ -742,6 +688,14 @@ where
 
         self.base_state.chip_lp_ln_mode = CHIP_LOW_NOISE_ICM20948;
         self.write_mems_reg::<bank0::Bank>(bank0::LP_CONFIG, data)?;
+        Ok(())
+    }
+
+    /// Enter low power mode I2C
+    pub fn enter_i2c_low_power_mode(&mut self) -> Result<(), Icm20948Error> {
+        // Only secondary cycle mode
+        self.base_state.chip_lp_ln_mode = CHIP_LOW_POWER_WOI2C_ICM20948;
+        self.modify_mems_reg::<bank0::Bank, _>(bank0::LP_CONFIG, |x| x | bits::I2C_MST_CYCLE)?;
         Ok(())
     }
 
@@ -829,71 +783,29 @@ where
         self.base_state.accel_divider
     }
 
-    /// Get ODR in different units
-    pub fn get_odr_in_units(&mut self, odr_in_divider: u16, odr_units: u8) -> u32 {
-        if self.base_state.chip_lp_ln_mode == 0 {
-            self.base_state.chip_lp_ln_mode = self.read_mems_reg::<bank1::Bank>(bank1::TIMEBASE_CORRECTION_PLL).unwrap_or(0);
-        }
-        let pll = self.base_state.chip_lp_ln_mode;
+    // /// Get ODR in different units
+    // pub fn get_odr_in_units(&mut self, odr_in_divider: u16, odr_units: u8) -> u32 {
+    //     // Check if gyro is currently enabled
+    //     let gyro_is_on = self.is_gyro_enabled();
 
-        // Check if gyro is currently enabled
-        let gyro_is_on = self.is_gyro_enabled();
+    //     let us = if pll < 0x80 {
+    //         // Correction positive
+    //         (odr_in_divider as u64 * 1000000 / 1125) * 1270 /
+    //             (1270 + if gyro_is_on { pll as u64 } else { 0 })
+    //     } else {
+    //         let pll_adj = pll & 0x7F;
+    //         // Correction negative
+    //         (odr_in_divider as u64 * 1000000 / 1125) * 1270 /
+    //             (1270 - if gyro_is_on { pll_adj as u64 } else { 0 })
+    //     };
 
-        let us = if pll < 0x80 {
-            // Correction positive
-            (odr_in_divider as u64 * 1000000 / 1125) * 1270 /
-                (1270 + if gyro_is_on { pll as u64 } else { 0 })
-        } else {
-            let pll_adj = pll & 0x7F;
-            // Correction negative
-            (odr_in_divider as u64 * 1000000 / 1125) * 1270 /
-                (1270 - if gyro_is_on { pll_adj as u64 } else { 0 })
-        };
-
-        match odr_units {
-            0 => (us / 1000) as u32, // ODR_IN_Ms - en milisegundos
-            1 => us as u32,          // ODR_IN_Us - en microsegundos
-            2 => ((us / 1000) * (32768 / 1125)) as u32, // ODR_IN_Ticks
-            _ => 0
-        }
-    }
-
-    /// Sets the gyro scale factor for DMP
-    pub fn set_gyro_sf(&mut self, div: u8, _gyro_level: i32) -> Result<(), Icm20948Error> {
-        let gyro_level_adj = 4; // Due to the addition of API dmp_icm20648_set_gyro_fsr()
-
-        // Ensure timebase correction is read
-        if self.base_state.chip_lp_ln_mode == 0 {
-            self.base_state.chip_lp_ln_mode = self.read_mems_reg::<bank1::Bank>(bank1::TIMEBASE_CORRECTION_PLL)?;
-        }
-
-        let gyro_sf = if (self.base_state.chip_lp_ln_mode & 0x80) != 0 {
-            let magic_constant = 264446880937391u64;
-            let magic_constant_scale = 100000u64;
-            let result_ll = magic_constant * (1u64 << gyro_level_adj) * (1 + div as u64) /
-                (1270 - (self.base_state.chip_lp_ln_mode & 0x7F) as u64) / magic_constant_scale;
-
-            if result_ll > 0x7FFFFFFF {
-                0x7FFFFFFF
-            } else {
-                result_ll as i32
-            }
-        } else {
-            let magic_constant = 264446880937391u64;
-            let magic_constant_scale = 100000u64;
-            let result_ll = magic_constant * (1u64 << gyro_level_adj) * (1 + div as u64) /
-                (1270 + self.base_state.chip_lp_ln_mode as u64) / magic_constant_scale;
-            if result_ll > 0x7FFFFFFF {
-                0x7FFFFFFF
-            } else {
-                result_ll as i32
-            }
-        };
-
-        // Set DMP gyro SF
-        let bytes = gyro_sf.to_be_bytes();
-        self.write_mems(dmp::GYRO_SF, &bytes)
-    }
+    //     match odr_units {
+    //         0 => (us / 1000) as u32, // ODR_IN_Ms - en milisegundos
+    //         1 => us as u32,          // ODR_IN_Us - en microsegundos
+    //         2 => ((us / 1000) * (32768 / 1125)) as u32, // ODR_IN_Ticks
+    //         _ => 0
+    //     }
+    // }
 
     /// Set gyro full-scale range
     pub fn set_gyro_fullscale(&mut self, fsr: GyroFullScale) -> Result<(), Icm20948Error> {
@@ -912,39 +824,6 @@ where
         self.write_mems_reg::<bank2::Bank>(bank2::GYRO_CONFIG_1, gyro_config_1)
     }
 
-    /// Set ICM20948 gyro full-scale range
-    pub fn set_icm20948_gyro_fullscale(&mut self, level: i32) -> Result<(), Icm20948Error> {
-        let mut gyro_config_1_reg;
-        let mut gyro_config_2_reg;
-
-        if level >= 4 { // NUM_MPU_GFS
-            return Err(Icm20948Error::InvalidParameter);
-        }
-
-        gyro_config_1_reg = self.read_mems_reg::<bank2::Bank>(bank2::GYRO_CONFIG_1)?;
-        gyro_config_1_reg &= 0xC0;
-        gyro_config_1_reg |= ((level << 1) | 1) as u8; // fchoice = 1, filter = 0
-        self.write_mems_reg::<bank2::Bank>(bank2::GYRO_CONFIG_1, gyro_config_1_reg)?;
-
-        gyro_config_2_reg = self.read_mems_reg::<bank2::Bank>(bank2::GYRO_CONFIG_2)?;
-        gyro_config_2_reg &= 0xF8;
-        let dec3_cfg = match self.base_state.chip_lp_ln_mode {
-            1 => 0,
-            2 => 1,
-            4 => 2,
-            8 => 3,
-            16 => 4,
-            32 => 5,
-            64 => 6,
-            128 => 7,
-            _ => 0,
-        };
-        gyro_config_2_reg |= dec3_cfg;
-        self.write_mems_reg::<bank2::Bank>(bank2::GYRO_CONFIG_2, gyro_config_2_reg)?;
-
-        Ok(())
-    }
-
     /// Set accel full-scale range
     pub fn set_accel_fullscale(&mut self, fsr: AccelFullScale) -> Result<(), Icm20948Error> {
         let mut accel_config = self.read_mems_reg::<bank2::Bank>(bank2::ACCEL_CONFIG_1)?;
@@ -959,43 +838,6 @@ where
 
         self.base_state.accel_fullscale = fsr;
         self.write_mems_reg::<bank2::Bank>(bank2::ACCEL_CONFIG_1, accel_config)?;
-
-        Ok(())
-    }
-
-    /// Set ICM20948 accel full-scale range
-    pub fn set_icm20948_accel_fullscale(&mut self, level: i32) -> Result<(), Icm20948Error> {
-        let mut accel_config_1_reg;
-        let mut accel_config_2_reg;
-
-        if level >= 4 { // NUM_MPU_AFS
-            return Err(Icm20948Error::InvalidParameter);
-        }
-
-        accel_config_1_reg = self.read_mems_reg::<bank2::Bank>(bank2::ACCEL_CONFIG_1)?;
-        accel_config_1_reg &= 0xC0;
-
-        if self.base_state.chip_lp_ln_mode > 1 {
-            accel_config_1_reg |= (7 << 3) | ((level << 1) | 1) as u8; // fchoice = 1, filter = 7
-        } else {
-            accel_config_1_reg |= ((level << 1) | 0) as u8; // fchoice = 0, filter = 0
-        }
-
-        self.write_mems_reg::<bank2::Bank>(bank2::ACCEL_CONFIG_1, accel_config_1_reg)?; 
-
-        let dec3_cfg = match self.base_state.chip_lp_ln_mode {
-            1 => 0,
-            4 => 0,
-            8 => 1,
-            16 => 2,
-            32 => 3,
-            _ => 0,
-        };
-
-        accel_config_2_reg = self.read_mems_reg::<bank2::Bank>(bank2::ACCEL_CONFIG_2)?;
-        accel_config_2_reg &= 0xFC;
-        accel_config_2_reg |= dec3_cfg;
-        self.write_mems_reg::<bank2::Bank>(bank2::ACCEL_CONFIG_2, accel_config_2_reg)?;
 
         Ok(())
     }
@@ -1047,6 +889,15 @@ where
         Ok(temp_raw)
     }
 
+    pub fn set_clock_source(&mut self, source: u8) -> Result<(), Icm20948Error> {
+        let mut pwr_mgmt_1 = self.read_mems_reg::<bank0::Bank>(bank0::PWR_MGMT_1)?;
+        pwr_mgmt_1 &= !0x07; // Clear clock source bits
+        pwr_mgmt_1 |= source; // Set new clock source
+        self.write_mems_reg::<bank0::Bank>(bank0::PWR_MGMT_1, pwr_mgmt_1)?;
+        self.base_state.pwr_mgmt_1 = pwr_mgmt_1; // Update base state
+        Ok(())
+    }
+
     /// Initialize the device with basic configuration
     pub fn initialize(&mut self) -> Result<(), Icm20948Error> {
         // Reset the device
@@ -1064,9 +915,7 @@ where
         self.reset_fifo()?; // Reset FIFO
 
         // // Wake up the device
-        self.base_state.pwr_mgmt_1 |= bits::CLK_PLL;
-        self.write_reg::<bank0::Bank>(bank0::PWR_MGMT_1, self.base_state.pwr_mgmt_1) // PLL with X-axis gyro as clock reference
-            .map_err(|_| Icm20948Error::InterfaceError)?;
+        self.set_clock_source(bits::CLK_PLL)?; // Set clock source to PLL with X axis gyroscope reference
 
         // Configure INT pin
         self.write_regs::<bank0::Bank>(bank0::INT_PIN_CFG, &[0x30]) // INT active low, push-pull, no latch
@@ -1077,19 +926,19 @@ where
             .map_err(|_| Icm20948Error::InterfaceError)?;
 
         // // Configure FIFO
-        // self.write_regs::<bank0::Bank>(bank0::FIFO_CFG, &[bits::SINGLE_FIFO_CFG])
-        //     .map_err(|_| Icm20948Error::InterfaceError)?;
-        // self.write_regs::<bank0::Bank>(bank0::FIFO_RST, &[0x1F]) // Reset all FIFOs
-        //     .map_err(|_| Icm20948Error::InterfaceError)?;
-        // self.write_regs::<bank0::Bank>(bank0::FIFO_RST, &[0x1E]) // Keep all but Gyro FIFO in reset
-        //     .map_err(|_| Icm20948Error::InterfaceError)?;
-        // self.write_regs::<bank0::Bank>(bank0::FIFO_EN_1, &[0x00]) // Disable FIFO
-        //     .map_err(|_| Icm20948Error::InterfaceError)?;
-        // self.write_regs::<bank0::Bank>(bank0::FIFO_EN_2, &[0x00]) // Disable FIFO 2
-        //     .map_err(|_| Icm20948Error::InterfaceError)?;
+        self.write_regs::<bank0::Bank>(bank0::FIFO_CFG, &[bits::SINGLE_FIFO_CFG])
+            .map_err(|_| Icm20948Error::InterfaceError)?;
+        self.write_regs::<bank0::Bank>(bank0::FIFO_RST, &[0x1F]) // Reset all FIFOs
+            .map_err(|_| Icm20948Error::InterfaceError)?;
+        self.write_regs::<bank0::Bank>(bank0::FIFO_RST, &[0x1E]) // Keep all but Gyro FIFO in reset
+            .map_err(|_| Icm20948Error::InterfaceError)?;
+        self.write_regs::<bank0::Bank>(bank0::FIFO_EN_1, &[0x00]) // Disable FIFO
+            .map_err(|_| Icm20948Error::InterfaceError)?;
+        self.write_regs::<bank0::Bank>(bank0::FIFO_EN_2, &[0x00]) // Disable FIFO 2
+            .map_err(|_| Icm20948Error::InterfaceError)?;
 
         // Setup MEMS properties
-        self.base_state.chip_lp_ln_mode = 1;
+        self.base_state.chip_lp_ln_mode = 2;
         self.base_state.lp_en_support = 1;
         self.set_gyro_divider(FIFO_DIVIDER)?; // 1125Hz/20 = 56.25Hz
         self.set_accel_divider(FIFO_DIVIDER as u16)?; // 1125Hz/20 = 56.25Hz
@@ -1119,6 +968,7 @@ where
     /// Perform a soft reset
     pub fn soft_reset(&mut self) -> Result<(), Icm20948Error> {
         self.base_state.last_bank_selected = 0xFF; // Reset last bank selected
+        self.base_state.last_mems_bank_selected = 0xFF; // Reset last MEMS bank selecte
         self.modify_reg::<bank0::Bank, _>(bank0::PWR_MGMT_1, |val| val | bits::H_RESET)?;
         self.delay.delay_ms(100); // Wait 100ms for reset to complete
         Ok(())
@@ -1248,10 +1098,12 @@ where
     }
 
     /// Activar el modo de bajo consumo
-    pub fn low_power(&mut self) -> Result<(), Icm20948Error> {
-        let reg = self.read_mems_reg::<bank0::Bank>(bank0::PWR_MGMT_1)?;
-        let new_reg = reg | bits::LP_EN;
-        self.write_mems_reg::<bank0::Bank>(bank0::PWR_MGMT_1, new_reg)?;
+    pub fn low_power(&mut self, en: bool) -> Result<(), Icm20948Error> {
+        if en {
+            self.modify_reg::<bank0::Bank, _>(bank0::PWR_MGMT_1, |x| x | bits::LP_EN)?;
+        } else {
+            self.modify_reg::<bank0::Bank, _>(bank0::PWR_MGMT_1, |x| x & !bits::LP_EN)?;
+        }
         Ok(())
     }
 
@@ -1278,28 +1130,67 @@ where
 
     /// Activar bypass I2C
     pub fn enable_bypass_i2c(&mut self, enable: bool) -> Result<(), Icm20948Error> {
+        // Para activar bypass I2C:
+        // 1. Desactivar el I2C Master si está activado
+        // 2. Establecer el bit de bypass
+        // 3. Para desactivar, limpiamos el bit de bypass
+        
+        // Asegurarnos que estamos en el banco 0 para acceder a estos registros
+        self.set_bank(0)?;
+        
+        if enable {
+            // Leer el registro USER_CTRL
+            let user_ctrl = self.read_mems_reg::<bank0::Bank>(bank0::USER_CTRL)?;
+            
+            // Desactivar I2C Master si está activado
+            if (user_ctrl & bits::I2C_MST_EN) != 0 {
+                self.write_mems_reg::<bank0::Bank>(bank0::USER_CTRL, user_ctrl & !bits::I2C_MST_EN)?;
+                // Esperar a que el cambio surta efecto
+                self.delay.delay_ms(10);
+            }
+        }
+        
+        // Leer el registro INT_PIN_CFG
         let mut reg = self.read_mems_reg::<bank0::Bank>(bank0::INT_PIN_CFG)?;
+        
         if enable {
             reg |= bits::INT_BYPASS_EN;
         } else {
             reg &= !bits::INT_BYPASS_EN;
+            
+            // Si desactivamos bypass, podemos necesitar reactivar el I2C Master
+            let user_ctrl = self.read_mems_reg::<bank0::Bank>(bank0::USER_CTRL)?;
+            self.write_mems_reg::<bank0::Bank>(bank0::USER_CTRL, user_ctrl | bits::I2C_MST_EN)?;
         }
+        
+        // Escribir el registro INT_PIN_CFG
         self.write_mems_reg::<bank0::Bank>(bank0::INT_PIN_CFG, reg)?;
+        
+        // Esperar a que los cambios surtan efecto
+        self.delay.delay_ms(5);
+        
         Ok(())
     }
 
     /// Activar DMP
-    pub fn enable_dmp(&mut self) -> Result<(), Icm20948Error> {
-        self.modify_mems_reg::<bank0::Bank, _>(bank0::USER_CTRL, |val| val | bits::DMP_EN)?;
-        self.base_state.dmp_enabled = true;
+    pub fn enable_dmp(&mut self, enable: bool) -> Result<(), Icm20948Error> {
+        self.modify_mems_reg::<bank0::Bank, _>(bank0::USER_CTRL, |val| {
+            if enable {
+                val | bits::DMP_EN
+            } else {
+                val & !bits::DMP_EN
+            }
+        })?;
+        self.base_state.dmp_enabled = enable;
         Ok(())
     }
 
     /// Leer los datos de temperatura sin procesar
     pub fn read_temp_raw(&mut self) -> Result<i16, Icm20948Error> {
         let mut buffer = [0u8; 2];
-        self.read_mems(bank0::TEMP_OUT_H.into(), &mut buffer)?;
-        Ok(i16::from_be_bytes(buffer))
+        self.read_mems_regs::<bank0::Bank>(bank0::TEMP_OUT_H, &mut buffer)?;
+        let raw_temp = ((buffer[0] as i16) << 8) | (buffer[1] as i16);
+        Ok(raw_temp)
     }
 
     /// Obtener la escala del acelerómetro

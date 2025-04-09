@@ -1,8 +1,3 @@
-//! Firmware para el DMP3 (Digital Motion Processor) del ICM20948
-//!
-//! Este módulo contiene el firmware para el DMP3, que permite procesamiento 
-//! de movimiento avanzado como detección de orientación y gestos.
-
 pub const DMP3_FIRMWARE: &[u8] = &[
     0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,

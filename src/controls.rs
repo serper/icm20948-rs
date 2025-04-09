@@ -235,74 +235,6 @@ where
     pub fn set_low_power_mode(&mut self, low_power: bool) -> Result<(), Icm20948Error> {
         self.set_lowpower_or_highperformance(if low_power { 1 } else { 0 })
     }
-    
-    /// Activa el FIFO
-    pub fn enable_fifo(&mut self, enable: bool) -> Result<(), Icm20948Error> {
-        let mut int_enable = self.read_mems_reg::<bank0::Bank>(bank0::INT_ENABLE)?;
-
-        if enable {
-            int_enable |= 0x20; // bits::BIT_DATA_RDY_EN;
-        } else {
-            int_enable &= !0x20; // !bits::BIT_DATA_RDY_EN;
-        }
-
-        self.write_mems_reg::<bank0::Bank>(bank0::INT_ENABLE, int_enable)?;
-        
-        Ok(())
-    }
-    
-    /// Lee la cuenta actual del FIFO
-    pub fn read_fifo_count(&mut self) -> Result<u16, Icm20948Error> {
-        // Leer los bytes del contador FIFO
-        let mut fifo_count = [0u8; 2];
-        self.read_mems_regs::<bank0::Bank>(bank0::FIFO_COUNTH, &mut fifo_count[0..1])?;
-        self.read_mems_regs::<bank0::Bank>(bank0::FIFO_COUNTL, &mut fifo_count[1..2])?;
-        
-        // Combinar bytes para obtener el contador de 16 bits
-        let count = ((fifo_count[0] as u16) << 8) | fifo_count[1] as u16;
-        
-        Ok(count)
-    }
-    
-    /// Lee datos del FIFO
-    pub fn read_fifo_data(&mut self, buffer: &mut [u8], count: u16) -> Result<(), Icm20948Error> {
-        if buffer.len() < count as usize {
-            return Err(Icm20948Error::InvalidParameter);
-        }
-        
-        // Leer datos del FIFO
-        for i in 0..count as usize {
-            self.read_mems_regs::<bank0::Bank>(bank0::FIFO_R_W, &mut buffer[i..i+1])?;
-        }
-        
-        Ok(())
-    }
-    
-    /// Configura qué datos se envían al FIFO
-    pub fn configure_fifo_data(&mut self, accel: bool, gyro: bool, temp: bool) -> Result<(), Icm20948Error> {
-        // Configurar FIFO_EN_1 (accel y temperatura)
-        let mut fifo_en_1 = 0u8;
-        if accel {
-            fifo_en_1 |= 0x08; // Bit 3: ACCEL_FIFO_EN
-        }
-        if temp {
-            fifo_en_1 |= 0x80; // Bit 7: TEMP_FIFO_EN
-        }
-        self.write_mems_reg::<bank0::Bank>(bank0::FIFO_EN_1, fifo_en_1)
-            .map_err(|_| Icm20948Error::InterfaceError)?;
-        
-        // Configurar FIFO_EN_2 (giroscopio)
-        let mut fifo_en_2 = 0u8;
-        if gyro {
-            fifo_en_2 |= 0x80; // Bit 7: GYRO_X_FIFO_EN
-            fifo_en_2 |= 0x40; // Bit 6: GYRO_Y_FIFO_EN
-            fifo_en_2 |= 0x20; // Bit 5: GYRO_Z_FIFO_EN
-        }
-        self.write_mems_reg::<bank0::Bank>(bank0::FIFO_EN_2, fifo_en_2)
-            .map_err(|_| Icm20948Error::InterfaceError)?;
-        
-        Ok(())
-    }
 
     /// Set LPF for accelerometer
     pub fn set_accel_lpf(&mut self, setting: AccelLpfSetting) -> Result<(), Icm20948Error> {
@@ -312,5 +244,27 @@ where
     /// Set LPF for gyroscope
     pub fn set_gyro_lpf(&mut self, setting: GyroLpfSetting) -> Result<(), Icm20948Error> {
         self.modify_mems_reg::<bank2::Bank, _>(bank2::GYRO_CONFIG_1, |val| val & !bits::LPF_SETTING | setting as u8)
+    }
+
+    /// Enable DLPF for accelerometer
+    pub fn enable_accel_dlpf(&mut self, setting: bool) -> Result<(), Icm20948Error> {
+        self.modify_mems_reg::<bank2::Bank, _>(bank2::ACCEL_CONFIG_1, |val| {
+            if setting {
+                val | bits::LPF_SETTING
+            } else {
+                val & !bits::LPF_SETTING
+            }
+        })
+    }
+
+    /// Enable DLPF for gyroscope
+    pub fn enable_gyro_dlpf(&mut self, setting: bool) -> Result<(), Icm20948Error> {
+        self.modify_mems_reg::<bank2::Bank, _>(bank2::GYRO_CONFIG_1, |val| {
+            if setting {
+                val | bits::LPF_SETTING
+            } else {
+                val & !bits::LPF_SETTING
+            }
+        })
     }
 }

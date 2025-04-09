@@ -60,6 +60,7 @@ pub mod registers {
         pub const TEMP_OUT_L: u8 = 0x3A;
         
         // Registros de FIFO
+        pub const SINGLE_FIFO_PRIORITY_SEL: u8 = 0x26;
         pub const FIFO_EN_1: u8 = 0x66;
         pub const FIFO_EN_2: u8 = 0x67;
         pub const FIFO_RST: u8 = 0x68;
@@ -201,143 +202,408 @@ pub mod registers {
 /// Registros del DMP (Digital Motion Processor)
 pub mod dmp {
     // Data output control registers
-    pub const DATA_OUT_CTL1: u16 = 4 * 16;
-    pub const DATA_OUT_CTL2: u16 = 4 * 16 + 2;
-    pub const DATA_INTR_CTL: u16 = 4 * 16 + 12;
-    pub const MOTION_EVENT_CTL: u16 = 4 * 16 + 14;
-    pub const DATA_RDY_STATUS: u16 = 8 * 16 + 10;
-    pub const FIFO_WATERMARK: u16 = 31 * 16 + 14;
+    pub mod data_output_control {
+        pub const DATA_OUT_CTL1: u16 = 4 * 16;
+        pub const DATA_OUT_CTL2: u16 = 4 * 16 + 2;
+        pub const DATA_INTR_CTL: u16 = 4 * 16 + 12;
+        pub const MOTION_EVENT_CTL: u16 = 4 * 16 + 14;
+        pub const DATA_RDY_STATUS: u16 = 8 * 16 + 10;
+        pub const FIFO_WATERMARK: u16 = 31 * 16 + 14;
+    }
 
-    // Sensor ODR addresses
-    pub const ODR_ACCEL: u16 = 11 * 16 + 14;
-    pub const ODR_GYRO: u16 = 11 * 16 + 10;
-    pub const ODR_CPASS: u16 = 11 * 16 + 6;
-    pub const ODR_ALS: u16 = 11 * 16 + 2;
-    pub const ODR_QUAT6: u16 = 10 * 16 + 12;
-    pub const ODR_QUAT9: u16 = 10 * 16 + 8;
-    pub const ODR_PQUAT6: u16 = 10 * 16 + 4;
-    pub const ODR_GEOMAG: u16 = 10 * 16 + 0;
-    pub const ODR_PRESSURE: u16 = 11 * 16 + 12;
-    pub const ODR_GYRO_CALIBR: u16 = 11 * 16 + 8;
-    pub const ODR_CPASS_CALIBR: u16 = 11 * 16 + 4;
+    pub mod odr
+    {
+        pub const ACCEL: u16 = 11 * 16 + 14;
+        pub const GYRO: u16 = 11 * 16 + 10;
+        pub const CPASS: u16 = 11 * 16 + 6;
+        pub const ALS: u16 = 11 * 16 + 2;
+        pub const QUAT6: u16 = 10 * 16 + 12;
+        pub const QUAT9: u16 = 10 * 16 + 8;
+        pub const PQUAT6: u16 = 10 * 16 + 4;
+        pub const GEOMAG: u16 = 10 * 16 + 0;
+        pub const PRESSURE: u16 = 11 * 16 + 12;
+        pub const GYRO_CALIBR: u16 = 11 * 16 + 8;
+        pub const CPASS_CALIBR: u16 = 11 * 16 + 4;
+    }
 
+    // ODR counter registers
+    pub mod odr_counter {
+        pub const ACCEL: u16 = 9 * 16 + 14;
+        pub const GYRO: u16 = 9 * 16 + 10;
+        pub const CPASS: u16 = 9 * 16 + 6;
+        pub const ALS: u16 = 9 * 16 + 2;
+        pub const QUAT6: u16 = 8 * 16 + 12;
+        pub const QUAT9: u16 = 8 * 16 + 8;
+        pub const PQUAT6: u16 = 8 * 16 + 4;
+        pub const GEOMAG: u16 = 8 * 16 + 0;
+        pub const PRESSURE: u16 = 9 * 16 + 12;
+        pub const GYRO_CALIBR: u16 = 9 * 16 + 8;
+        pub const CPASS_CALIBR: u16 = 9 * 16 + 4;
+    }
+    
     // Batch mode
-    pub const BM_BATCH_CNTR: u16 = 27 * 16;
-    pub const BM_BATCH_THLD: u16 = 19 * 16 + 12;
-    pub const BM_BATCH_MASK: u16 = 21 * 16 + 14;
+    pub mod bm_batch {
+        pub const CNTR: u16 = 27 * 16;
+        pub const THLD: u16 = 19 * 16 + 12;
+        pub const MASK: u16 = 21 * 16 + 14;
+    }
 
     // Bias registers
-    pub const ACCEL_BIAS_X: u16 = 110 * 16 + 4;
-    pub const ACCEL_BIAS_Y: u16 = 110 * 16 + 8;
-    pub const ACCEL_BIAS_Z: u16 = 110 * 16 + 12;
-    pub const GYRO_BIAS_X: u16 = 139 * 16 + 4;
-    pub const GYRO_BIAS_Y: u16 = 139 * 16 + 8;
-    pub const GYRO_BIAS_Z: u16 = 139 * 16 + 12;
-    pub const CPASS_BIAS_X: u16 = 126 * 16 + 4;
-    pub const CPASS_BIAS_Y: u16 = 126 * 16 + 8;
-    pub const CPASS_BIAS_Z: u16 = 126 * 16 + 12;
+    pub mod bias {
+        pub const ACCEL_X: u16 = 110 * 16 + 4;
+        pub const ACCEL_Y: u16 = 110 * 16 + 8;
+        pub const ACCEL_Z: u16 = 110 * 16 + 12;
+        pub const GYRO_X: u16 = 139 * 16 + 4;
+        pub const GYRO_Y: u16 = 139 * 16 + 8;
+        pub const GYRO_Z: u16 = 139 * 16 + 12;
+        pub const CPASS_X: u16 = 126 * 16 + 4;
+        pub const CPASS_Y: u16 = 126 * 16 + 8;
+        pub const CPASS_Z: u16 = 126 * 16 + 12;
+    }
 
     // Scale and gain registers
-    pub const GYRO_SF: u16 = 19 * 16;
-    pub const ACCEL_ONLY_GAIN: u16 = 16 * 16 + 12;
-    pub const ACCEL_ALPHA_VAR: u16 = 91 * 16;
-    pub const ACCEL_A_VAR: u16 = 92 * 16;
-    pub const ACCEL_CAL_RATE: u16 = 94 * 16 + 4;
-    
+    pub mod scale {
+        pub const GYRO_SF: u16 = 19 * 16;
+        pub const ACCEL_ONLY_GAIN: u16 = 16 * 16 + 12;
+        pub const ACCEL_ALPHA_VAR: u16 = 91 * 16;
+        pub const ACCEL_A_VAR: u16 = 92 * 16;
+        pub const ACCEL_CAL_RATE: u16 = 94 * 16 + 4;
+    }
+
     // Compass calibration
-    pub const CPASS_TIME_BUFFER: u16 = 112 * 16 + 14;
-    pub const CPASS_RADIUS_3D_THRESH_ANOMALY: u16 = 112 * 16 + 8;
-    
+    pub mod compass_cal {
+        pub const TIME_BUFFER: u16 = 112 * 16 + 14;
+        pub const RADIUS_3D_THRESH_ANOMALY: u16 = 112 * 16 + 8;
+    }
+ 
     // Compass matrix
-    pub const CPASS_MTX_00: u16 = 23 * 16;
-    pub const CPASS_MTX_01: u16 = 23 * 16 + 4;
-    pub const CPASS_MTX_02: u16 = 23 * 16 + 8;
-    pub const CPASS_MTX_10: u16 = 23 * 16 + 12;
-    pub const CPASS_MTX_11: u16 = 24 * 16;
-    pub const CPASS_MTX_12: u16 = 24 * 16 + 4;
-    pub const CPASS_MTX_20: u16 = 24 * 16 + 8;
-    pub const CPASS_MTX_21: u16 = 24 * 16 + 12;
-    pub const CPASS_MTX_22: u16 = 25 * 16;
+    pub mod cpass {
+        pub const MTX_00: u16 = 23 * 16;
+        pub const MTX_01: u16 = 23 * 16 + 4;
+        pub const MTX_02: u16 = 23 * 16 + 8;
+        pub const MTX_10: u16 = 23 * 16 + 12;
+        pub const MTX_11: u16 = 24 * 16;
+        pub const MTX_12: u16 = 24 * 16 + 4;
+        pub const MTX_20: u16 = 24 * 16 + 8;
+        pub const MTX_21: u16 = 24 * 16 + 12;
+        pub const MTX_22: u16 = 25 * 16;
+    }
     
     // Pedometer
-    pub const PEDSTD_STEPCTR: u16 = 54 * 16;
-    
+    pub mod pedometer {
+        pub const BP_B: u16 = 49 * 16 + 12;
+        pub const BP_A4: u16 = 52 * 16;
+        pub const BP_A3: u16 = 52 * 16 + 4;
+        pub const BP_A2: u16 = 52 * 16 + 8;
+        pub const BP_A1: u16 = 52 * 16 + 12;
+        pub const SB: u16 = 50 * 16 + 8;
+        pub const SB_TIME: u16 = 50 * 16 + 12;
+        pub const PEAKTHRSH: u16 = 57 * 16 + 8;
+        pub const TIML: u16 = 50 * 16 + 10;
+        pub const TIMH: u16 = 50 * 16 + 14;
+        pub const PEAK: u16 = 57 * 16 + 4;
+        pub const STEPCTR: u16 = 54 * 16;
+        pub const STEPCTR2: u16 = 58 * 16 + 8;
+        pub const TIMECTR: u16 = 60 * 16 + 4;
+        pub const DECI: u16 = 58 * 16;
+        pub const SB2: u16 = 60 * 16 + 14;
+        pub const STPDET_TIMESTAMP: u16 = 18 * 16 + 8;
+        pub const PEDSTEP_IND: u16 = 19 * 16 + 4;
+        pub const PED_Y_RATIO: u16 = 17 * 16 + 0;
+    }    
     // Wake on Motion
-    pub const WOM_ENABLE: u16 = 64 * 16 + 14;
-    pub const WOM_STATUS: u16 = 64 * 16 + 6;
-    pub const WOM_THRESHOLD: u16 = 64 * 16;
-    pub const WOM_CNTR_TH: u16 = 64 * 16 + 12;
+    pub mod wom {
+        pub const ENABLE: u16 = 64 * 16 + 14;
+        pub const STATUS: u16 = 64 * 16 + 6;
+        pub const THRESHOLD: u16 = 64 * 16;
+        pub const CNTR_TH: u16 = 64 * 16 + 12;
+    }
     
     // Gyro and Accel FSR
-    pub const GYRO_FULLSCALE: u16 = 72 * 16 + 12;
-    pub const ACC_SCALE: u16 = 30 * 16 + 0;
-    pub const ACC_SCALE2: u16 = 79 * 16 + 4;
+    pub mod fsr {
+        pub const GYRO: u16 = 72 * 16 + 12;
+        pub const ACC: u16 = 30 * 16 + 0;
+        pub const ACC2: u16 = 79 * 16 + 4;
+    }
     
     // EIS authentication
-    pub const EIS_AUTH_INPUT: u16 = 160 * 16 + 4;
-    pub const EIS_AUTH_OUTPUT: u16 = 160 * 16 + 0;
+    pub mod eis_auth {
+        pub const INPUT: u16 = 160 * 16 + 4;
+        pub const OUTPUT: u16 = 160 * 16 + 0;
+    }
     
     // BAC and B2S
-    pub const BAC_RATE: u16 = 48 * 16 + 10;
-    pub const B2S_RATE: u16 = 48 * 16 + 8;
+    pub mod bac {
+        pub const BAC_RATE: u16 = 48 * 16 + 10;
+        pub const B2S_RATE: u16 = 48 * 16 + 8;
+    }
     
     // B2S Matrix
-    pub const B2S_MTX_00: u16 = 208 * 16;
-    pub const B2S_MTX_01: u16 = 208 * 16 + 4;
-    pub const B2S_MTX_02: u16 = 208 * 16 + 8;
-    pub const B2S_MTX_10: u16 = 208 * 16 + 12;
-    pub const B2S_MTX_11: u16 = 209 * 16;
-    pub const B2S_MTX_12: u16 = 209 * 16 + 4;
-    pub const B2S_MTX_20: u16 = 209 * 16 + 8;
-    pub const B2S_MTX_21: u16 = 209 * 16 + 12;
-    pub const B2S_MTX_22: u16 = 210 * 16;
-    
-    // Flip/Pickup
-    pub const FP_RATE: u16 = 240 * 16 + 12;
-    
-    // Pedometer
-    pub const PED_Y_RATIO: u16 = 17 * 16 + 0;
+    pub mod b2s_mtx {
+        pub const B2S_MTX_00: u16 = 208 * 16;
+        pub const B2S_MTX_01: u16 = 208 * 16 + 4;
+        pub const B2S_MTX_02: u16 = 208 * 16 + 8;
+        pub const B2S_MTX_10: u16 = 208 * 16 + 12;
+        pub const B2S_MTX_11: u16 = 209 * 16;
+        pub const B2S_MTX_12: u16 = 209 * 16 + 4;
+        pub const B2S_MTX_20: u16 = 209 * 16 + 8;
+        pub const B2S_MTX_21: u16 = 209 * 16 + 12;
+        pub const B2S_MTX_22: u16 = 210 * 16;
+    }
     
     // Orientation parameters
-    pub const Q0_QUAT6: u16 = 33 * 16 + 0;
-    pub const Q1_QUAT6: u16 = 33 * 16 + 4;
-    pub const Q2_QUAT6: u16 = 33 * 16 + 8;
-    pub const Q3_QUAT6: u16 = 33 * 16 + 12;
+    pub mod orientation {   
+        pub const Q0_QUAT6: u16 = 33 * 16 + 0;
+        pub const Q1_QUAT6: u16 = 33 * 16 + 4;
+        pub const Q2_QUAT6: u16 = 33 * 16 + 8;
+        pub const Q3_QUAT6: u16 = 33 * 16 + 12;
+    }
     
     // BAC states
-    pub const BAC_STATE: u16 = 179 * 16 + 0;
-    pub const BAC_STATE_PREV: u16 = 179 * 16 + 4;
-    pub const BAC_ACT_ON: u16 = 182 * 16 + 0;
-    pub const BAC_ACT_OFF: u16 = 183 * 16 + 0;
-    pub const BAC_STILL_S_F: u16 = 177 * 16 + 0;
-    pub const BAC_RUN_S_F: u16 = 177 * 16 + 4;
-    pub const BAC_DRIVE_S_F: u16 = 178 * 16 + 0;
-    pub const BAC_WALK_S_F: u16 = 178 * 16 + 4;
-    pub const BAC_SMD_S_F: u16 = 178 * 16 + 8;
-    pub const BAC_BIKE_S_F: u16 = 178 * 16 + 12;
-    pub const BAC_E1_SHORT: u16 = 146 * 16 + 0;
-    pub const BAC_E2_SHORT: u16 = 146 * 16 + 4;
-    pub const BAC_E3_SHORT: u16 = 146 * 16 + 8;
-    pub const BAC_VAR_RUN: u16 = 148 * 16 + 12;
-    pub const BAC_TILT_INIT: u16 = 181 * 16 + 0;
-    pub const BAC_MAG_ON: u16 = 225 * 16 + 0;
-    pub const BAC_PS_ON: u16 = 74 * 16 + 0;
-    pub const BAC_DRIVE_CONFIDENCE: u16 = 144 * 16 + 0;
-    pub const BAC_WALK_CONFIDENCE: u16 = 144 * 16 + 4;
-    pub const BAC_SMD_CONFIDENCE: u16 = 144 * 16 + 8;
-    pub const BAC_BIKE_CONFIDENCE: u16 = 144 * 16 + 12;
-    pub const BAC_STILL_CONFIDENCE: u16 = 145 * 16 + 0;
-    pub const BAC_RUN_CONFIDENCE: u16 = 145 * 16 + 4;
-    pub const BAC_MODE_CNTR: u16 = 150 * 16;
-    pub const BAC_STATE_T_PREV: u16 = 185 * 16 + 4;
-    pub const BAC_ACT_T_ON: u16 = 184 * 16 + 0;
-    pub const BAC_ACT_T_OFF: u16 = 184 * 16 + 4;
-    pub const BAC_STATE_WRDBS_PREV: u16 = 185 * 16 + 8;
-    pub const BAC_ACT_WRDBS_ON: u16 = 184 * 16 + 8;
-    pub const BAC_ACT_WRDBS_OFF: u16 = 184 * 16 + 12;
-    pub const BAC_ACT_ON_OFF: u16 = 190 * 16 + 2;
-    pub const PREV_BAC_ACT_ON_OFF: u16 = 188 * 16 + 2;
-    pub const BAC_CNTR: u16 = 48 * 16 + 2;
+    pub mod bac_state {
+        pub const STATE: u16 = 179 * 16 + 0;
+        pub const STATE_PREV: u16 = 179 * 16 + 4;
+        pub const ACT_ON: u16 = 182 * 16 + 0;
+        pub const ACT_OFF: u16 = 183 * 16 + 0;
+        pub const STILL_S_F: u16 = 177 * 16 + 0;
+        pub const RUN_S_F: u16 = 177 * 16 + 4;
+        pub const DRIVE_S_F: u16 = 178 * 16 + 0;
+        pub const WALK_S_F: u16 = 178 * 16 + 4;
+        pub const SMD_S_F: u16 = 178 * 16 + 8;
+        pub const BIKE_S_F: u16 = 178 * 16 + 12;
+        pub const E1_SHORT: u16 = 146 * 16 + 0;
+        pub const E2_SHORT: u16 = 146 * 16 + 4;
+        pub const E3_SHORT: u16 = 146 * 16 + 8;
+        pub const VAR_RUN: u16 = 148 * 16 + 12;
+        pub const TILT_INIT: u16 = 181 * 16 + 0;
+        pub const MAG_ON: u16 = 225 * 16 + 0;
+        pub const PS_ON: u16 = 74 * 16 + 0;
+        pub const DRIVE_CONFIDENCE: u16 = 144 * 16 + 0;
+        pub const WALK_CONFIDENCE: u16 = 144 * 16 + 4;
+        pub const SMD_CONFIDENCE: u16 = 144 * 16 + 8;
+        pub const BIKE_CONFIDENCE: u16 = 144 * 16 + 12;
+        pub const STILL_CONFIDENCE: u16 = 145 * 16 + 0;
+        pub const RUN_CONFIDENCE: u16 = 145 * 16 + 4;
+        pub const MODE_CNTR: u16 = 150 * 16;
+        pub const STATE_T_PREV: u16 = 185 * 16 + 4;
+        pub const ACT_T_ON: u16 = 184 * 16 + 0;
+        pub const ACT_T_OFF: u16 = 184 * 16 + 4;
+        pub const STATE_WRDBS_PREV: u16 = 185 * 16 + 8;
+        pub const ACT_WRDBS_ON: u16 = 184 * 16 + 8;
+        pub const ACT_WRDBS_OFF: u16 = 184 * 16 + 12;
+        pub const ACT_ON_OFF: u16 = 190 * 16 + 2;
+        pub const PREV_ACT_ON_OFF: u16 = 188 * 16 + 2;
+        pub const CNTR: u16 = 48 * 16 + 2;
+    }
+
+    pub mod data_ready_status {
+        pub const GYRO: u16 = 0x0001;             // Gyro samples available
+        pub const ACCEL: u16 = 0x0002;            // Accel samples available
+        pub const SECONDARY_COMPASS: u16 = 0x0008; // Secondary compass samples available
+    }
+
+
+
+
+
+    // Data output control 1 register bit definition
+        // 16-bit accel                                0x8000
+        // 16-bit gyro                                 0x4000
+        // 16-bit compass                              0x2000
+        // 16-bit ALS                                  0x1000
+        // 32-bit 6-axis quaternion                    0x0800
+        // 32-bit 9-axis quaternion + heading accuracy 0x0400
+        // 16-bit pedometer quaternion                 0x0200
+        // 32-bit Geomag rv + heading accuracy         0x0100
+        // 16-bit Pressure                             0x0080
+        // 32-bit calibrated gyro                      0x0040
+        // 32-bit calibrated compass                   0x0020
+        // Pedometer Step Detector                     0x0010
+        // Header 2                                    0x0008
+        // Pedometer Step Indicator Bit 2              0x0004
+        // Pedometer Step Indicator Bit 1              0x0002
+        // Pedometer Step Indicator Bit 0              0x0001
+        // Unsupported Sensors are 0xFFFF
+        
+    /// Output mask bits for data_output_control1
+    pub mod output_mask {
+        /// ACCEL_SET
+        pub const ACCEL: u16 = 0x8000;
+        /// GYRO_SET
+        pub const GYRO: u16 = 0x4000;
+        /// CPASS_SET
+        pub const CPASS: u16 = 0x2000;
+        /// ALS_SET
+        pub const ALS: u16 = 0x1000;
+        /// QUAT6_SET
+        pub const QUAT6: u16 = 0x0800;
+        /// QUAT9_SET
+        pub const QUAT9: u16 = 0x0400;
+        /// PQUAT6_SET
+        pub const PQUAT6: u16 = 0x0200;
+        /// GEOMAG_SET
+        pub const GEOMAG: u16 = 0x0100;
+        /// PRESSURE_SET
+        pub const PRESSURE: u16 = 0x0080;
+        /// GYRO_CALIBR_SET
+        pub const GYRO_CALIBR: u16 = 0x0040;
+        /// CPASS_CALIBR_SET
+        pub const CPASS_CALIBR: u16 = 0x0020;
+        /// PED_STEPDET_SET
+        pub const PED_STEPDET: u16 = 0x0010;
+        /// HEADER2_SET
+        pub const HEADER2: u16 = 0x0008;
+        /// PED_STEPIND_SET
+        pub const PED_STEPIND: u16 = 0x0007;
+    }
+
+    /// Output mask bits for data_output_control2
+    pub mod output_mask2 {
+        pub const SECONDARY_ON_OFF: u16 = 0x0040;
+        pub const ACTIVITY_RECOGNITION_BAC: u16 = 0x0080;
+        pub const BATCH_MODE_ENABLE: u16 = 0x0100;
+        pub const PICKUP: u16 = 0x0400;
+        pub const FSYNC_DETECTION: u16 = 0x0800;
+        pub const COMPASS_ACCURACY: u16 = 0x1000;
+        pub const GYRO_ACCURACY: u16 = 0x2000;
+        pub const ACCEL_ACCURACY: u16 = 0x4000;
+    }
+
+    /// Motion event control mask bits
+    pub mod motion_event_control {
+        /// BAC_WEAR_EN
+        pub const BAC_WEAR_EN: u16 = 0x8000;
+        /// PEDOMETER_EN
+        pub const PEDOMETER_EN: u16 = 0x4000;
+        /// PEDOMETER_INT_EN
+        pub const PEDOMETER_INT_EN: u16 = 0x2000;
+        /// SMD_EN
+        pub const SMD_EN: u16 = 0x0800;
+        /// ACCEL_CAL_EN
+        pub const ACCEL_CAL_EN: u16 = 0x0200;
+        /// GYRO_CAL_EN
+        pub const GYRO_CAL_EN: u16 = 0x0100;
+        /// COMPASS_CAL_EN
+        pub const COMPASS_CAL_EN: u16 = 0x0080;
+        /// NINE_AXIS_EN
+        pub const NINE_AXIS_EN: u16 = 0x0040;
+        /// GEOMAG_EN
+        pub const GEOMAG_EN: u16 = 0x0008;
+        /// BTS_LTS_EN
+        pub const BTS_LTS_EN: u16 = 0x0004;
+        /// BAC_ACCEL_ONLY_EN
+        pub const BAC_ACCEL_ONLY_EN: u16 = 0x0002;
+    }
+
+    // Activity Recognition
+    pub mod activity_recognition {
+        pub const RATE: u16 = 48 * 16 + 10;
+        pub const STATE: u16 = 179 * 16 + 0;
+        pub const STATE_PREV: u16 = 179 * 16 + 4;
+        pub const ACT_ON: u16 = 182 * 16 + 0;
+        pub const ACT_OFF: u16 = 183 * 16 + 0;
+        pub const STILL_S_F: u16 = 177 * 16 + 0;
+        pub const RUN_S_F: u16 = 177 * 16 + 4;
+        pub const DRIVE_S_F: u16 = 178 * 16 + 0;
+        pub const WALK_S_F: u16 = 178 * 16 + 4;
+        pub const SMD_S_F: u16 = 178 * 16 + 8;
+        pub const BIKE_S_F: u16 = 178 * 16 + 12;
+        pub const E1_SHORT: u16 = 146 * 16 + 0;
+        pub const E2_SHORT: u16 = 146 * 16 + 4;
+        pub const E3_SHORT: u16 = 146 * 16 + 8;
+        pub const VAR_RUN: u16 = 148 * 16 + 12;
+        pub const TILT_INIT: u16 = 181 * 16 + 0;
+        pub const MAG_ON: u16 = 225 * 16 + 0;
+        pub const PS_ON: u16 = 74 * 16 + 0;
+        pub const BIKE_PREFERENCE: u16 = 173 * 16 + 8;
+        pub const MAG_I2C_ADDR: u16 = 229 * 16 + 8;
+        pub const PS_I2C_ADDR: u16 = 75 * 16 + 4;
+        pub const DRIVE_CONFIDENCE: u16 = 144 * 16 + 0;
+        pub const WALK_CONFIDENCE: u16 = 144 * 16 + 4;
+        pub const SMD_CONFIDENCE: u16 = 144 * 16 + 8;
+        pub const BIKE_CONFIDENCE: u16 = 144 * 16 + 12;
+        pub const STILL_CONFIDENCE: u16 = 145 * 16 + 0;
+        pub const RUN_CONFIDENCE: u16 = 145 * 16 + 4;
+        pub const MODE_CNTR: u16 = 150 * 16;
+        pub const STATE_T_PREV: u16 = 185 * 16 + 4;
+        pub const ACT_T_ON: u16 = 184 * 16 + 0;
+        pub const ACT_T_OFF: u16 = 184 * 16 + 4;
+        pub const STATE_WRDBS_PREV: u16 = 185 * 16 + 8;
+        pub const ACT_WRDBS_ON: u16 = 184 * 16 + 8;
+        pub const ACT_WRDBS_OFF: u16 = 184 * 16 + 12;
+        pub const ACT_ON_OFF: u16  = 190 * 16 + 2;
+        pub const PREV_ACT_ON_OFF: u16 = 188 * 16 + 2;
+        pub const CNTR: u16 = 48 * 16 + 2;
+    }
+
+    // DMP running counter
+    pub mod dmp_running_counter {
+        pub const DMPRATE_CNTR: u16 = 18 * 16 + 4;
+    }
+
+
+    // SMD
+    pub mod smd {   
+        pub const SMD_VAR_TH: u16 = 141 * 16 + 12;
+        pub const SMD_VAR_TH_DRIVE: u16 = 143 * 16 + 12;
+        pub const SMD_DRIVE_TIMER_TH: u16 = 143 * 16 + 8;
+        pub const SMD_TILT_ANGLE_TH: u16 = 179 * 16 + 12;
+        pub const BAC_SMD_ST_TH: u16 = 179 * 16 + 8;
+        pub const BAC_ST_ALPHA4: u16 = 180 * 16 + 12;
+        pub const BAC_ST_ALPHA4A: u16 = 176 * 16 + 12;
+    }
+
+    // Wake on Motion
+    pub mod wake_on_motion {
+        pub const WOM_ENABLE: u16 = 64 * 16 + 14;
+        pub const WOM_STATUS: u16 = 64 * 16 + 6;
+        pub const WOM_THRESHOLD_DMP: u16 = 64 * 16;
+        pub const WOM_CNTR_TH: u16 = 64 * 16 + 12;
+    }
+
+    // Flip/Pick-up
+    pub mod flip_pickup {
+        pub const VAR_ALPHA: u16 = 245 * 16 + 8;
+        pub const STILL_TH: u16 = 246 * 16 + 4;
+        pub const MID_STILL_TH: u16 = 244 * 16 + 8;
+        pub const NOT_STILL_TH: u16 = 246 * 16 + 8;
+        pub const VIB_REJ_TH: u16 = 241 * 16 + 8;
+        pub const MAX_PICKUP_T_TH: u16 = 244 * 16 + 12;
+        pub const PICKUP_TIMEOUT_TH: u16 = 248 * 16 + 8;
+        pub const STILL_CONST_TH: u16 = 246 * 16 + 12;
+        pub const MOTION_CONST_TH: u16 = 240 * 16 + 8;
+        pub const VIB_COUNT_TH: u16 = 242 * 16 + 8;
+        pub const STEADY_TILT_TH: u16 = 247 * 16 + 8;
+        pub const STEADY_TILT_UP_TH: u16 = 242 * 16 + 12;
+        pub const Z_FLAT_TH_MINUS: u16 = 243 * 16 + 8;
+        pub const Z_FLAT_TH_PLUS: u16 = 243 * 16 + 12;
+        pub const DEV_IN_POCKET_TH: u16 = 76 * 16 + 12;
+        pub const PICKUP_CNTR: u16 = 247 * 16 + 4;
+        pub const RATE: u16 = 240 * 16 + 12;
+    }
+
+    pub enum AlgoFreq {
+        /// Freq56Hz
+        Freq56Hz = 56,
+        /// Freq112Hz
+        Freq112Hz = 112,
+        /// Freq225Hz
+        Freq225Hz = 225,
+        /// Freq450Hz
+        Freq450Hz = 450,
+        /// Freq900Hz
+        Freq900Hz = 900,
+    }
+
+    /// Parameters for accel calibration
+    pub enum AccelCalParam {
+        /// AlphaVar
+        AlphaVar = 0,
+        /// AVar
+        AVar = 1,
+        /// Div
+        Div = 2,
+    }
 }
 
 // /// Registros del magnetómetro AK09916

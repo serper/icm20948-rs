@@ -5,7 +5,7 @@
 //! los datos de los sensores físicos y procesamiento adicional.
 
 use crate::device::Icm20948;
-use crate::dmp_fifo::{QuaternionData, OrientationData};
+use crate::dmp_fifo::Quaternion;
 use crate::controls::{AccelData, GyroData};
 use core::f32::consts::PI;
 use crate::types::{AccelFullScale, GyroFullScale};
@@ -31,6 +31,21 @@ pub struct LinearAccelData {
     pub timestamp_us: u64,
 }
 
+/// Datos de orientación en ángulos de Euler
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OrientationData {
+    /// Ángulo de roll (grados)
+    pub roll: f32,
+    /// Ángulo de pitch (grados)
+    pub pitch: f32,
+    /// Ángulo de yaw/heading (grados)
+    pub yaw: f32,
+    /// Precisión del rumbo (grados)
+    pub heading_accuracy: f32,
+    /// Marca de tiempo en microsegundos
+    pub timestamp_us: u64,
+}
+
 /// Estado de los sensores aumentados
 pub struct AugmentedState {
     /// Datos de gravedad actual
@@ -40,7 +55,7 @@ pub struct AugmentedState {
     /// Datos de orientación actual
     pub orientation: OrientationData,
     /// Último cuaternión utilizado para cálculos
-    pub last_quaternion: QuaternionData,
+    pub last_quaternion: Quaternion,
 }
 
 impl AugmentedState {
@@ -56,7 +71,13 @@ impl AugmentedState {
                 timestamp_us: 0,
             },
             orientation: OrientationData::default(),
-            last_quaternion: QuaternionData::default(),
+            last_quaternion: Quaternion {
+                w: 1.0,
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                heading_accuracy_deg: None,
+            },
         }
     }
 
@@ -129,45 +150,46 @@ impl Default for AugmentedState {
 }
 
 /// Implementación de sensores aumentados para ICM20948
-impl<I2C, D, E> Icm20948<I2C, D>
+impl<I, D, E> Icm20948<I, D>
 where
-    I2C: embedded_hal::blocking::i2c::Write<Error = E> + embedded_hal::blocking::i2c::WriteRead<Error = E>,
+    I: embedded_hal::blocking::i2c::Write<Error = E> + embedded_hal::blocking::i2c::WriteRead<Error = E>,
+    D: embedded_hal::blocking::delay::DelayMs<u32>,
 {
     /// Obtiene la gravedad a partir de datos de cuaternión de 6 ejes
-    pub fn get_gravity_from_quat6(&mut self, quat: &QuaternionData) -> GravityData {
+    pub fn get_gravity_from_quat6(&mut self, quat: &Quaternion) -> GravityData {
         // Para cuaternión de 6-ejes, solo tenemos componentes x, y, z (no w)
         // Reconstruimos w para tener un cuaternión unitario
         let qw = compute_quat_w(quat.x, quat.y, quat.z);
         let qw_sq = qw * qw;
         
         // Calcular componentes de gravedad (rotación del vector [0, 0, 1] por el cuaternión)
-        let mut gravity = GravityData {
-            gravity: [0.0, 0.0, 1.0],
-            timestamp_us: quat.timestamp_us,
+        let gravity = GravityData {
+            gravity: [
+                2.0 * (quat.x * quat.z - qw * quat.y),
+                2.0 * (qw * quat.x + quat.y * quat.z),
+                qw_sq - quat.x * quat.x - quat.y * quat.y + quat.z * quat.z
+            ],
+            timestamp_us: 0,
         };
-        
-        gravity.gravity[0] = 2.0 * (quat.x * quat.z - qw * quat.y);
-        gravity.gravity[1] = 2.0 * (qw * quat.x + quat.y * quat.z);
-        gravity.gravity[2] = qw_sq - quat.x * quat.x - quat.y * quat.y + quat.z * quat.z;
         
         gravity
     }
     
     /// Obtiene la gravedad a partir de datos de cuaternión de 9 ejes
-    pub fn get_gravity_from_quat9(&mut self, quat: &QuaternionData) -> GravityData {
+    pub fn get_gravity_from_quat9(&mut self, quat: &Quaternion) -> GravityData {
         // Para cuaternión de 9-ejes, tenemos los 4 componentes del cuaternión
         let qw = quat.w;
         let qw_sq = qw * qw;
         
         // Calcular componentes de gravedad
-        let mut gravity = GravityData {
-            gravity: [0.0, 0.0, 1.0],
-            timestamp_us: quat.timestamp_us,
+        let gravity = GravityData {
+            gravity: [
+                2.0 * (quat.x * quat.z - qw * quat.y),
+                2.0 * (qw * quat.x + quat.y * quat.z),
+                qw_sq - quat.x * quat.x - quat.y * quat.y + quat.z * quat.z
+            ],
+            timestamp_us: 0,
         };
-        
-        gravity.gravity[0] = 2.0 * (quat.x * quat.z - qw * quat.y);
-        gravity.gravity[1] = 2.0 * (qw * quat.x + quat.y * quat.z);
-        gravity.gravity[2] = qw_sq - quat.x * quat.x - quat.y * quat.y + quat.z * quat.z;
         
         gravity
     }
@@ -190,7 +212,7 @@ where
     }
     
     /// Obtiene orientación en ángulos de Euler (roll, pitch, yaw) a partir de cuaternión de 9 ejes
-    pub fn get_orientation_from_quat9(&mut self, quat: &QuaternionData) -> OrientationData {
+    pub fn get_orientation_from_quat9(&mut self, quat: &Quaternion) -> OrientationData {
         // Convertir cuaternión a ángulos de Euler
         let (roll, pitch, mut yaw) = quaternion_to_euler(quat.w, quat.x, quat.y, quat.z);
         
@@ -203,13 +225,13 @@ where
             roll,
             pitch,
             yaw,
-            heading_accuracy: 0.0,  // En una implementación real, esto dependería de la precisión del magnetómetro
-            timestamp_us: quat.timestamp_us,
+            heading_accuracy: quat.heading_accuracy_deg.unwrap_or(0.0),
+            timestamp_us: 0,
         }
     }
     
     /// Obtiene orientación en ángulos de Euler a partir de cuaternión de 6 ejes
-    pub fn get_orientation_from_quat6(&mut self, quat: &QuaternionData) -> OrientationData {
+    pub fn get_orientation_from_quat6(&mut self, quat: &Quaternion) -> OrientationData {
         // Reconstruir qw para cuaternión de 6 ejes
         let qw = compute_quat_w(quat.x, quat.y, quat.z);
         
@@ -226,7 +248,7 @@ where
             pitch,
             yaw,
             heading_accuracy: 0.0,
-            timestamp_us: quat.timestamp_us,
+            timestamp_us: 0,
         }
     }
     
@@ -234,14 +256,14 @@ where
     pub fn update_augmented_sensors(
         &mut self,
         state: &mut AugmentedState,
-        quat: &QuaternionData,
+        quat: &Quaternion,
         accel: &AccelData
     ) {
         // Guardar cuaternión
         state.last_quaternion = *quat;
         
         // Calcular gravedad (según tipo de cuaternión)
-        if quat.w > 0.0 || quat.w < 0.0 {
+        if quat.w != 0.0 {
             // Cuaternión de 9-ejes
             state.gravity = self.get_gravity_from_quat9(quat);
             state.orientation = self.get_orientation_from_quat9(quat);
@@ -256,7 +278,7 @@ where
     }
     
     /// Calcula la matriz de rotación a partir de cuaternión
-    pub fn quaternion_to_rotation_matrix(&mut self, quat: &QuaternionData) -> [[f32; 3]; 3] {
+    pub fn quaternion_to_rotation_matrix(&mut self, quat: &Quaternion) -> [[f32; 3]; 3] {
         let mut qw = quat.w;
         let qx = quat.x;
         let qy = quat.y;
@@ -340,7 +362,7 @@ pub mod quat {
     use super::*;
     
     /// Multiplica dos cuaterniones q1 * q2
-    pub fn multiply(q1: &QuaternionData, q2: &QuaternionData) -> QuaternionData {
+    pub fn multiply(q1: &Quaternion, q2: &Quaternion) -> Quaternion {
         let mut q1w = q1.w;
         let q1x = q1.x;
         let q1y = q1.y;
@@ -362,30 +384,28 @@ pub mod quat {
         }
         
         // Multiplicación de cuaterniones
-        QuaternionData {
+        Quaternion {
             w: q1w * q2w - q1x * q2x - q1y * q2y - q1z * q2z,
             x: q1w * q2x + q1x * q2w + q1y * q2z - q1z * q2y,
             y: q1w * q2y - q1x * q2z + q1y * q2w + q1z * q2x,
             z: q1w * q2z + q1x * q2y - q1y * q2x + q1z * q2w,
-            accuracy_rad: q1.accuracy_rad.max(q2.accuracy_rad),
-            timestamp_us: q1.timestamp_us.max(q2.timestamp_us),
+            heading_accuracy_deg: q1.heading_accuracy_deg.or(q2.heading_accuracy_deg),
         }
     }
     
     /// Calcula el conjugado de un cuaternión
-    pub fn conjugate(q: &QuaternionData) -> QuaternionData {
-        QuaternionData {
+    pub fn conjugate(q: &Quaternion) -> Quaternion {
+        Quaternion {
             w: q.w,
             x: -q.x,
             y: -q.y,
             z: -q.z,
-            accuracy_rad: q.accuracy_rad,
-            timestamp_us: q.timestamp_us,
+            heading_accuracy_deg: q.heading_accuracy_deg,
         }
     }
     
     /// Normaliza un cuaternión para que sea unitario (|q| = 1)
-    pub fn normalize(q: &QuaternionData) -> QuaternionData {
+    pub fn normalize(q: &Quaternion) -> Quaternion {
         let mut qw = q.w;
         let qx = q.x;
         let qy = q.y;
@@ -401,30 +421,34 @@ pub mod quat {
         
         if magnitude < 1e-6 {
             // Evitar división por cero
-            QuaternionData::default()
+            Quaternion {
+                w: 1.0,
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                heading_accuracy_deg: None,
+            }
         } else {
             // Normalizar
-            QuaternionData {
+            Quaternion {
                 w: qw / magnitude,
                 x: qx / magnitude,
                 y: qy / magnitude,
                 z: qz / magnitude,
-                accuracy_rad: q.accuracy_rad,
-                timestamp_us: q.timestamp_us,
+                heading_accuracy_deg: q.heading_accuracy_deg,
             }
         }
     }
     
     /// Rota un vector por un cuaternión
-    pub fn rotate_vector(q: &QuaternionData, v: [f32; 3]) -> [f32; 3] {
+    pub fn rotate_vector(q: &Quaternion, v: [f32; 3]) -> [f32; 3] {
         // Construir cuaternión del vector (0, v)
-        let mut qv = QuaternionData {
+        let mut qv = Quaternion {
             w: 0.0,
             x: v[0],
             y: v[1],
             z: v[2],
-            accuracy_rad: 0.0,
-            timestamp_us: 0,
+            heading_accuracy_deg: None,
         };
         
         // Rotación: q * v * q^-1
@@ -436,7 +460,7 @@ pub mod quat {
     }
     
     /// Convierte ángulos de Euler a cuaternión
-    pub fn from_euler(roll_deg: f32, pitch_deg: f32, yaw_deg: f32) -> QuaternionData {
+    pub fn from_euler(roll_deg: f32, pitch_deg: f32, yaw_deg: f32) -> Quaternion {
         // Convertir a radianes
         let roll = roll_deg * DEG_TO_RAD;
         let pitch = pitch_deg * DEG_TO_RAD;
@@ -448,13 +472,12 @@ pub mod quat {
         let (sy, cy) = (yaw * 0.5).sin_cos();
         
         // Calcular cuaternión
-        QuaternionData {
+        Quaternion {
             w: cr * cp * cy + sr * sp * sy,
             x: sr * cp * cy - cr * sp * sy,
             y: cr * sp * cy + sr * cp * sy,
             z: cr * cp * sy - sr * sp * cy,
-            accuracy_rad: 0.0,
-            timestamp_us: 0,
+            heading_accuracy_deg: None,
         }
     }
 }

@@ -1,5 +1,14 @@
 //! Definiciones de tipos y constantes comunes para el ICM20948
 
+/// Maximum size for serial read operations
+pub const INV_MAX_SERIAL_READ: usize = 16;
+/// Maximum size for serial write operations
+pub const INV_MAX_SERIAL_WRITE: usize = 16;
+/// DMP firmware load address
+pub const DMP_LOAD_START: u16 = 0x90;
+/// DMP firmware start address
+pub const DMP_START_ADDRESS: u16 = 0x1000;
+
 /// Escalas completas disponibles para el giroscopio
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -73,8 +82,9 @@ pub mod bits {
     pub const CHIP_AWAKE: u8 = 0x40;
 
     // Mode bits para LP_CONFIG
-    pub const GYRO_CYCLE: u8 = 0x80;
-    pub const ACCEL_CYCLE: u8 = 0x40;
+    pub const GYRO_CYCLE: u8 = 0x10;
+    pub const ACCEL_CYCLE: u8 = 0x20;
+    pub const I2C_MST_CYCLE: u8 = 0x40;
 
     // Bits de máscara para selección de escalas
     pub const GYRO_FS_SEL: u8 = 0x06; // Bits [2:1]
@@ -84,6 +94,7 @@ pub mod bits {
     pub const INT1_ACTL: u8 = 0x80;
     pub const INT_ANYRD_2CLEAR: u8 = 0x10;
     pub const INT_BYPASS_EN: u8 = 0x02;
+    pub const INT_RAW_DATA_RDY_EN: u8 = 0x01;
     
     // Otros bits de control
     pub const FIFO_EN: u8 = 0x40;
@@ -97,10 +108,11 @@ pub mod bits {
     
     pub const DMP_RST: u8 = 0x08;
     pub const I2C_MST_EN: u8 = 0x20;
-    pub const I2C_MST_CYCLE: u8 = 0x40;
+    pub const I2C_BYPASS_EN: u8 = 0x02;
     pub const SINGLE_FIFO_CFG: u8 = 0x01;
     pub const DMP_INT_EN: u8 = 0x02;
     pub const I2C_MST_P_NSR: u8 = 0x10;
+    pub const I2C_MST_RST: u8 = 0x02;
 
     pub const DATA_RDY_3_EN: u8 = 0x08;
     pub const DATA_RDY_2_EN: u8 = 0x04;
@@ -218,4 +230,260 @@ pub mod data_defs {
     pub const OPERATE_GYRO_IN_DUTY_CYCLED_MODE: u8 = 1 << 4;
     pub const OPERATE_ACCEL_IN_DUTY_CYCLED_MODE: u8 = 1 << 5;
     pub const OPERATE_I2C_MASTER_IN_DUTY_CYCLED_MODE: u8 = 1 << 6;
+}
+
+// Constantes para los encabezados del DMP
+#[allow(non_upper_case_globals)]
+pub mod dmp_header {
+    pub const PED_STEPIND: u16 = 0x0007;        // Number of steps detected in 3 LSBs of header
+    pub const HEADER2: u16 = 0x0008;            // Enable/disable data output in data output control register 2
+    pub const STEP_DETECTOR: u16 = 0x0010;      // Timestamp when each step is detected
+    pub const COMPASS_CALIBR: u16 = 0x0020;     // Calibrated magnetic
+    pub const GYRO_CALIBR: u16 = 0x0040;        // Calibrated gyro
+    pub const PRESSURE: u16 = 0x0080;           // Pressure
+    pub const GEOMAG: u16 = 0x0100;             // Geomagnetic rotation vector with heading accuracy
+    pub const PQUAT6: u16 = 0x0200;             // Truncated game rotation vector for batching 
+    pub const QUAT9: u16 = 0x0400;              // Rotation vector with heading accuracy   
+    pub const QUAT6: u16 = 0x0800;              // Game rotation vector
+    pub const ALS: u16 = 0x1000;                // Ambient light sensor
+    pub const COMPASS: u16 = 0x2000;            // Compass
+    pub const GYRO: u16 = 0x4000;               // Gyroscope
+    pub const ACCEL: u16 = 0x8000;              // Accelerometer
+    pub const EMPTY: u16 = 0xFFFF;              // Empty value
+}
+
+#[allow(non_upper_case_globals)]
+pub mod dmp_header2 {
+    pub const SECONDARY_ON_OFF: u16 = 0x0040;   // Enable/disable secondary sensor
+    pub const ACTIVITY_RECOG: u16 = 0x0080;     // Activity recognition engine
+    pub const BATCH_MODE_EN: u16 = 0x0100;      // Enable batching (HEADER2)
+    pub const PICKUP: u16 = 0x0400;             // Flip/pick-up gesture detector (HEADER2)
+    pub const FSYNC: u16 = 0x0800;              // Frame sync from camera sensor (HEADER2)
+    pub const COMPASS_ACCURACY: u16 = 0x1000;   // Compass accuracy when changes (HEADER2)
+    pub const GYRO_ACCURACY: u16 = 0x2000;      // Gyro accuracy when changes (HEADER2)
+    pub const ACCEL_ACCURACY: u16 = 0x4000;     // Accel accuracy when changes (HEADER2)
+}
+
+#[allow(non_upper_case_globals)]
+pub mod dmp_packet_bytes {
+    pub const HEADER: usize = 2;
+    pub const HEADER2: usize = 2;
+    pub const RAW_ACCEL: usize = 6;
+    pub const RAW_GYRO: usize = 6;
+    pub const GYRO_BIAS: usize = 6;
+    pub const COMPASS: usize = 6;
+    pub const ALS: usize = 8;
+    pub const QUAT6: usize = 12;
+    pub const QUAT9: usize = 14;
+    pub const PQUAT6: usize = 6;
+    pub const GEOMAG: usize = 14;
+    pub const PRESSURE: usize = 6;
+    pub const GYRO_CALIBR: usize = 12;
+    pub const COMPASS_CALIBR: usize = 12;
+    pub const STEP_DETECTOR: usize = 4;
+    pub const STEP_COUNTER: usize = 2;
+    pub const FOOTER: usize = 2;
+    pub const MAXIMUM: usize = 14;
+}
+
+#[allow(non_upper_case_globals)]
+pub mod dmp_packet_bytes2 {
+    pub const ACCEL_ACCURACY: usize = 2;
+    pub const GYRO_ACCURACY: usize = 2;
+    pub const COMPASS_ACCURACY: usize = 2;
+    pub const FSYNC: usize = 2;
+    pub const PICKUP: usize = 2;
+    pub const BATCH_MODE: usize = 2;
+    pub const ACTIVITY_RECOG: usize = 6;
+    pub const SECONDARY_ON_OFF: usize = 2;
+}
+
+// pub enum Sensor {
+//     Accel,
+//     Gyro,
+//     Cpass,
+//     Als,
+//     Quat6,
+//     Quat9,
+//     Pquat6,
+//     Geomag,
+//     Pressure,
+//     GyroCalibr,
+//     CpassCalibr,
+//     StepDetector,
+//     Header2,
+//     PedometerStepIndicatorBits,
+// }
+
+#[derive(Clone, Copy)]
+pub enum Sensor {
+    Accelerometer,
+    Gyroscope,
+    RawAccelerometer,
+    RawGyroscope,
+    MagneticFieldUncalibrated,
+    GyroscopeUncalibrated,
+    ActivityClassification,
+    StepDetector,
+    StepCounter,
+    GameRotationVector,
+    RotationVector,
+    GeomagneticRotationVector,
+    GeomagneticField,
+    WakeupSignificantMotion,
+    FlipPickup,
+    WakeupTiltDetector,
+    Gravity,
+    LinearAcceleration,
+    Orientation,
+    B2S,
+    RawMagnetometer,
+    Max,
+}
+
+#[derive(Clone, Copy)]
+pub enum AndroidSensor
+{
+    MetaData,               // 0
+    Accelerometer,               // 1
+    GeomagneticField,           // 2
+    Orientation,                 // 3
+    Gyroscope,                   // 4
+    Light,                       // 5
+    Pressure,                    // 6
+    Temperature,                 // 7
+    WakeupProximity,            // 8
+    Gravity,                     // 9
+    LinearAcceleration,         // 10
+    RotationVector,             // 11
+    Humidity,                    // 12
+    AmbientTemperature,         // 13
+    MagneticFieldUncalibrated, // 14
+    GameRotationVector,        // 15
+    GyroscopeUncalibrated,      // 16
+    WakeupSignificantMotion,   // 17
+    StepDetector,               // 18
+    StepCounter,                // 19
+    GeomagneticRotationVector, // 20
+    HeartRate,                  // 21
+    Proximity,                   // 22
+    WakeupAccelerometer,               // 23
+    WakeupMagneticField,              // 24
+    WakeupOrientation,                 // 25
+    WakeupGyroscope,                   // 26
+    WakeupLight,                       // 27
+    WakeupPressure,                    // 28
+    WakeupGravity,                     // 29
+    WakeupLinearAcceleration,         // 30
+    WakeupRotationVector,             // 31
+    WakeupRelativeHumidity,           // 32
+    WakeupAmbientTemperature,         // 33
+    WakeupMagneticFieldUncalibrated, // 34
+    WakeupGameRotationVector,        // 35
+    WakeupGyroscopeUncalibrated,      // 36
+    WakeupStepDetector,               // 37
+    WakeupStepCounter,                // 38
+    WakeupGeomagneticRotationVector, // 39
+    WakeupHeartRate,                  // 40
+    WakeupTiltDetector,               // 41
+    RawAccelerometer,                  // 42
+    RawGyroscope,                      // 43
+    NumMax,                            // 44
+    B2S,                    // 45
+    FlipPickup,            // 46
+    ActivityClassification, // 47
+    ScreenRotation,        // 48
+    SelfTest,                             // 49
+    Setup,                                 // 50
+    GeneralSensorsMax                    // 51
+}
+
+pub const SENSORTOCONTROLBITS: &[u16] = &[
+        // Data output control 1 register bit definition
+        // 16-bit accel                                0x8000
+        // 16-bit gyro                                 0x4000
+        // 16-bit compass                              0x2000
+        // 16-bit ALS                                  0x1000
+        // 32-bit 6-axis quaternion                    0x0800
+        // 32-bit 9-axis quaternion + heading accuracy 0x0400
+        // 16-bit pedometer quaternion                 0x0200
+        // 32-bit Geomag rv + heading accuracy         0x0100
+        // 16-bit Pressure                             0x0080
+        // 32-bit calibrated gyro                      0x0040
+        // 32-bit calibrated compass                   0x0020
+        // Pedometer Step Detector                     0x0010
+        // Header 2                                    0x0008
+        // Pedometer Step Indicator Bit 2              0x0004
+        // Pedometer Step Indicator Bit 1              0x0002
+        // Pedometer Step Indicator Bit 0              0x0001
+        // Unsupported Sensors are 0xFFFF
+
+        0xFFFF, // 0  Meta Data
+        0x8008, // 1  Accelerometer
+        0x0028, // 2  Magnetic Field
+        0x0408, // 3  Orientation
+        0x4048, // 4  Gyroscope
+        0x1008, // 5  Light
+        0x0088, // 6  Pressure
+        0xFFFF, // 7  Temperature
+        0xFFFF, // 8  Proximity <----------- fixme
+        0x0808, // 9  Gravity
+        0x8808, // 10 Linear Acceleration
+        0x0408, // 11 Rotation Vector
+        0xFFFF, // 12 Humidity
+        0xFFFF, // 13 Ambient Temperature
+        0x2008, // 14 Magnetic Field Uncalibrated
+        0x0808, // 15 Game Rotation Vector
+        0x4008, // 16 Gyroscope Uncalibrated
+        0x0000, // 17 Significant Motion
+        0x0018, // 18 Step Detector
+        0x0010, // 19 Step Counter <----------- fixme
+        0x0108, // 20 Geomagnetic Rotation Vector
+        0xFFFF, // 21 ANDROID_SENSOR_HEART_RATE,
+        0xFFFF, // 22 ANDROID_SENSOR_PROXIMITY,
+
+        0x8008, // 23 ANDROID_SENSOR_WAKEUP_ACCELEROMETER,
+        0x0028, // 24 ANDROID_SENSOR_WAKEUP_MAGNETIC_FIELD,
+        0x0408, // 25 ANDROID_SENSOR_WAKEUP_ORIENTATION,
+        0x4048, // 26 ANDROID_SENSOR_WAKEUP_GYROSCOPE,
+        0x1008, // 27 ANDROID_SENSOR_WAKEUP_LIGHT,
+        0x0088, // 28 ANDROID_SENSOR_WAKEUP_PRESSURE,
+        0x0808, // 29 ANDROID_SENSOR_WAKEUP_GRAVITY,
+        0x8808, // 30 ANDROID_SENSOR_WAKEUP_LINEAR_ACCELERATION,
+        0x0408, // 31 ANDROID_SENSOR_WAKEUP_ROTATION_VECTOR,
+        0xFFFF, // 32 ANDROID_SENSOR_WAKEUP_RELATIVE_HUMIDITY,
+        0xFFFF, // 33 ANDROID_SENSOR_WAKEUP_AMBIENT_TEMPERATURE,
+        0x2008, // 34 ANDROID_SENSOR_WAKEUP_MAGNETIC_FIELD_UNCALIBRATED,
+        0x0808, // 35 ANDROID_SENSOR_WAKEUP_GAME_ROTATION_VECTOR,
+        0x4008, // 36 ANDROID_SENSOR_WAKEUP_GYROSCOPE_UNCALIBRATED,
+        0x0018, // 37 ANDROID_SENSOR_WAKEUP_STEP_DETECTOR,
+        0x0010, // 38 ANDROID_SENSOR_WAKEUP_STEP_COUNTER,
+        0x0108, // 39 ANDROID_SENSOR_WAKEUP_GEOMAGNETIC_ROTATION_VECTOR
+        0xFFFF, // 40 ANDROID_SENSOR_WAKEUP_HEART_RATE,
+        0x0000, // 41 ANDROID_SENSOR_WAKEUP_TILT_DETECTOR,
+        0x8008, // 42 Raw Acc
+        0x4048 // 43 Raw Gyr
+];
+
+pub enum OdrSensor {
+    Accel,
+    Gyro,
+    Cpass,
+    Als,
+    Quat6,
+    Quat9,
+    Pquat6,
+    Geomag,
+    Pressure,
+    GyroCalibr,
+    CpassCalibr,
+}
+
+pub enum Activity {
+    Drive = 0x01,
+    Walk = 0x02,
+    Run = 0x04,
+    Bike = 0x08,
+    Tilt = 0x10,
+    Still = 0x20,
 }

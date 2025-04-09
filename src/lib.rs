@@ -14,7 +14,6 @@ pub mod dmp;
 pub mod dmp3_firmware;
 pub mod dmp_fifo;
 pub mod fifo;
-pub mod firmware;
 pub mod interface;
 pub mod register;
 pub mod selftest;
@@ -30,7 +29,7 @@ pub use controls::{AccelLpfSetting, GyroLpfSetting, SampleRate};
 pub use conversion::{accel_raw_to_g, gyro_raw_to_dps, temp_raw_to_celsius};
 
 // Importaciones necesarias para resolver errores de compilación
-use crate::interface::{Interface, I2cInterface, SpiInterface};
+use crate::interface::{I2cInterface, SpiInterface};
 
 /// Crea un nuevo dispositivo ICM20948 usando el bus I2C
 pub fn new_i2c_device<I2C, D, E>(

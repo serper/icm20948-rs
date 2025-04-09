@@ -5,6 +5,9 @@ use embedded_hal::blocking::spi::{Transfer, Write as SpiWrite};
 use embedded_hal::digital::v2::OutputPin;
 use crate::Icm20948Error;
 
+#[cfg(feature = "linux")]
+use linux_embedded_hal::i2cdev::linux::LinuxI2CError;
+
 /// Error genérico para interfaces de comunicación
 #[derive(Debug, Clone)]
 pub enum InterfaceError<E> {
@@ -16,6 +19,13 @@ pub enum InterfaceError<E> {
     PinError,
     /// Parámetro inválido
     InvalidParameter,
+}
+
+#[cfg(feature = "linux")]
+impl From<LinuxI2CError> for InterfaceError<LinuxI2CError> {
+    fn from(error: LinuxI2CError) -> Self {
+        InterfaceError::I2cError(error)
+    }
 }
 
 /// Trait para abstraer la comunicación con el dispositivo ICM20948
@@ -64,10 +74,10 @@ where
     type Error = InterfaceError<E>;
     
     fn write_reg(&mut self, reg: u8, data: &[u8]) -> Result<(), Self::Error> {
-        let mut buffer = [0u8; 16]; // Buffer suficiente para la mayoría de operaciones
+        let mut buffer = [0u8; 17]; // Buffer suficiente para la mayoría de operaciones
         buffer[0] = reg;
         
-        if data.len() > 15 {
+        if data.len() > 16 {
             return Err(InterfaceError::InvalidParameter);
         }
         

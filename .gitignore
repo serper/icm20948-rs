@@ -66,5 +66,6 @@ vendor/
 .probe.toml
 Embed.toml
 Arduino_ICM20948_DMP_Full-Function/
+SparkFun_ICM-20948_ArduinoLibrary/
 NOTAS.txt
 USE.md

@@ -10,7 +10,7 @@ use crate::base::{SystemTimeSource, TimeSource};
 use core::default::Default;
 
 // Import register
-use crate::register::registers::bank0;
+use crate::register::registers::{bank0, bank3};
 use crate::types::scale_factor as scale_factor;
 use crate::register::ak_reg as ak_reg;
 use crate::types::ak_val as ak_val;
@@ -164,7 +164,6 @@ impl<I, D, E> Icm20948<I, D>
 where
     I: Interface<Error = E>,
     D: DelayMs<u32>,
-    Icm20948Error: From<E>,
 {
     /// Registra un compás auxiliar con el driver
     pub fn register_aux_compass(&mut self, compass_type: CompassType, compass_i2c_addr: u8) -> Result<(), Icm20948Error> {
@@ -230,23 +229,37 @@ where
     /// Inicializa el compás conectado al ICM20948
     pub fn setup_compass(&mut self, compass_type: CompassType, compass_i2c_addr: u8) -> Result<CompassConfig, Icm20948Error> {
         // Registramos primero el compás
-        self.register_aux_compass(compass_type, compass_i2c_addr)?;
-        
+        self.register_aux_compass(compass_type, compass_i2c_addr)?;    
         // Inicializar la configuración secundaria I2C
         self.init_secondary_i2c()?;
         
         // Esperar un momento para que el bus I2C se estabilice
         self.delay.delay_ms(20u32);
 
-        // Leer WHOAMI del compás
-        let mut whoami_data = [0u8];
-        self.read_secondary_i2c(SecondaryI2cChannel::Slave3, compass_i2c_addr, ak_reg::WIA, &mut whoami_data)?;
+        // Resetear el compás
+        self.write_secondary_i2c(SecondaryI2cChannel::Slave3, compass_i2c_addr, ak_reg::AK09916_CNTL3, 0x01)?;
+
+        let mut retries = 10;
+        while retries > 0 {
+            let mut whoami_data = [0u8];
+            self.read_secondary_i2c(SecondaryI2cChannel::Slave3, compass_i2c_addr, ak_reg::WIA, &mut whoami_data)?;
         
-        // Verificar que es un compás AKM
-        if whoami_data[0] != ak_val::WIA_VAL {
+            // Verificar que es un compás AKM
+            if whoami_data[0] != ak_val::WIA_VAL {
+                // Probar a resetear el Master I2C
+                self.reset_master_i2c()?;
+                retries -= 1;
+            } else {
+                break;
+            }
+            self.delay.delay_ms(20u32);
+        }
+        if retries == 0 {
             return Err(Icm20948Error::WhoAmIError);
         }
         
+        println!("Compás conectado: {:?} ({:?})", compass_type, retries);
+
         // Crear una configuración de compás
         let mut compass_config = CompassConfig {
             compass_type,
@@ -294,7 +307,8 @@ where
             _ => ak_reg::MODE,
         };
         
-        self.write_secondary_i2c(SecondaryI2cChannel::Slave3, compass_i2c_addr, mode_reg, ak_val::POWER_DOWN)?;
+        // self.write_secondary_i2c(SecondaryI2cChannel::Slave3, compass_i2c_addr, mode_reg, ak_val::POWER_DOWN)?;
+        self.write_secondary_i2c(SecondaryI2cChannel::Slave3, compass_i2c_addr, mode_reg, ak_val::SINGLE_MEASURE)?;
         
         // Configurar para modo cíclico si es AK09912
         if compass_type == CompassType::AK09912 {
@@ -582,28 +596,20 @@ where
     
     /// Inicializa la interfaz I2C secundaria
     fn init_secondary_i2c(&mut self) -> Result<(), Icm20948Error> {
-        // Configurar Master I2C
-        self.set_bank(3)?;
-        
-        // Configure I2C_MST_CTRL register: WAIT_FOR_ES=1, I2C master clock 400 kHz
-        self.write_reg_raw(0x01, 0x4D)?;  // 0x4D = WAIT_FOR_ES | I2C_MST_P_NSR | 400kHz
-        
-        // Configure I2C_MST_DELAY_CTRL: delay shadowing
-        self.write_reg_raw(slave_reg::I2C_MST_DELAY_CTRL, 0x01)?;
-        
-        // Configurar timeout del I2C maestro a 0 (no timeout)
-        self.write_reg_raw(0x0D, 0x00)?;
-        
-        // Volver al banco 0
-        self.set_bank(0)?;
-        
-        // Habilitar I2C master
-        let user_ctrl = self.read_reg_raw(bank0::USER_CTRL)?;
-        self.write_reg_raw(bank0::USER_CTRL, user_ctrl | bits::I2C_MST_EN)?;
+        self.modify_reg::<bank0::Bank, _>(bank0::INT_PIN_CFG, |val| val & !bits::I2C_BYPASS_EN)?;
+        self.modify_reg::<bank3::Bank, _>(bank3::I2C_MST_CTRL, |val|(val & 0xE0) | 0x17)?; // 0x17 = 0b00010111 (I2C_MST_DELAY_CTRL) 
+        self.modify_reg::<bank0::Bank, _>(bank0::USER_CTRL, |val| val | bits::I2C_MST_EN)?; // Habilitar I2C maestro
         
         Ok(())
     }
     
+    /// Reset Master I2C
+    fn reset_master_i2c(&mut self) -> Result<(), Icm20948Error> {
+        self.modify_reg::<bank0::Bank, _>(bank0::USER_CTRL, |val| val | bits::I2C_MST_RST)?;
+        
+        Ok(())
+    }
+
     /// Lee datos desde el bus I2C secundario
     fn read_secondary_i2c(&mut self, channel: SecondaryI2cChannel, addr: u8, reg: u8, data: &mut [u8]) -> Result<(), Icm20948Error> {
         // Determinar los registros según el canal

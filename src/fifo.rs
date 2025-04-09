@@ -5,6 +5,7 @@
 
 use crate::device::{Icm20948, Icm20948Error};
 use crate::register::registers::bank0;
+use crate::types::bits;
 use crate::controls::{AccelData, GyroData};
 use crate::interface::Interface;
 use crate::base::{SystemTimeSource, TimeSource};
@@ -124,6 +125,19 @@ where
     I: Interface<Error = E>,
     D: DelayMs<u32>,
 {
+    /// Activar/Desactivar el FIFO
+    /// `enable`: true para activar, false para desactivar
+    pub fn set_fifo_enable(&mut self, enable: bool) -> Result<(), Icm20948Error> {
+        let mut user_ctrl = self.read_mems_reg::<bank0::Bank>(bank0::USER_CTRL)?;
+        if enable {
+            user_ctrl |= bits::FIFO_EN; // FIFO_EN bit
+        } else {
+            user_ctrl &= !bits::FIFO_EN; // Limpiar FIFO_EN bit
+        }
+        self.write_mems_reg::<bank0::Bank>(bank0::USER_CTRL, user_ctrl)?;
+        Ok(())
+    }
+
     /// Configura el FIFO según las especificaciones proporcionadas
     pub fn configure_fifo(&mut self, config: &FifoConfig) -> Result<(), Icm20948Error> {
         // Resetear el FIFO
@@ -167,25 +181,48 @@ where
     
     /// Resetea el FIFO
     pub fn reset_fifo(&mut self) -> Result<(), Icm20948Error> {
-        // Leer registro USER_CTRL actual
-        let mut user_ctrl = self.read_mems_reg::<bank0::Bank>(bank0::USER_CTRL)?;
+        // Leer registro FIFO_RST actual
+        let mut user_ctrl = self.read_mems_reg::<bank0::Bank>(bank0::FIFO_RST)?;
         
         // Establecer bit de reset FIFO
-        user_ctrl |= 0x04; // FIFO_RST bit
-        self.write_mems_reg::<bank0::Bank>(bank0::USER_CTRL, user_ctrl)?;
+        user_ctrl |= 0x1F; // FIFO_RST bit
+        self.write_mems_reg::<bank0::Bank>(bank0::FIFO_RST, user_ctrl)?;
         
         // Esperar un poco
         self.delay.delay_ms(1);
         
         // Limpiar bit de reset
-        user_ctrl &= !0x04;
-        self.write_mems_reg::<bank0::Bank>(bank0::USER_CTRL, user_ctrl)?;
+        user_ctrl = 0x1E;
+        self.write_mems_reg::<bank0::Bank>(bank0::FIFO_RST, user_ctrl)?;
+        
+        Ok(())
+    }
+
+    // Enable FIFO
+    pub fn enable_fifo(&mut self, enable: bool) -> Result<(), Icm20948Error> {
+        // Establecer o limpiar bit FIFO_EN según el parámetro
+        self.modify_reg::<bank0::Bank, _>(bank0::USER_CTRL, |reg| {
+            if enable {
+                reg | bits::FIFO_EN
+            } else {
+                reg & !bits::FIFO_EN
+            }
+        })?;
         
         Ok(())
     }
     
+    // Set FIFO mode 
+    pub fn set_fifo_mode_stream(&mut self, mode: bool) -> Result<(), Icm20948Error> {
+        // Escribir el modo en FIFO_MODE
+        let mode_value = if mode { 0x00 } else { 0x1F };
+        self.write_mems_reg::<bank0::Bank>(bank0::FIFO_MODE, mode_value)?;
+        
+        Ok(())
+    }
+
     /// Lee el contador de bytes disponibles en el FIFO
-    pub fn get_fifo_count(&mut self) -> Result<u16, Icm20948Error> {
+    pub fn get_fifo_count(&mut self) -> Result<usize, Icm20948Error> {
         // Leer contador FIFO (2 bytes)
         let fifo_count_h = self.read_mems_reg::<bank0::Bank>(bank0::FIFO_COUNTH)?;
         let fifo_count_l = self.read_mems_reg::<bank0::Bank>(bank0::FIFO_COUNTL)?;
@@ -193,7 +230,7 @@ where
         // Combinar bytes
         let count = ((fifo_count_h as u16) << 8) | fifo_count_l as u16;
         
-        Ok(count)
+        Ok(count as usize)
     }
     
     /// Lee datos del FIFO

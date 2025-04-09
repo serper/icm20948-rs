@@ -1,7 +1,7 @@
 use crate::device::Icm20948Error;
-use crate::dmp::{
-    DmpDriverIcm20948, Sensor, motion_event_control, output_mask, DmpAlgoFreq
-};
+use crate::dmp::DmpDriverIcm20948;
+use crate::register::dmp;
+use crate::types;
 use crate::interface::Interface;
 use embedded_hal::blocking::delay::DelayMs;
 
@@ -44,15 +44,15 @@ where
         self.reset_control_registers()?;
         
         // Configurar salidas básicas
-        let output_mask_val = output_mask::ACCEL_SET | 
-                            output_mask::GYRO_SET | 
-                            output_mask::QUAT6_SET;
+        let output_mask_val = dmp::output_mask::ACCEL | 
+                            dmp::output_mask::GYRO | 
+                            dmp::output_mask::QUAT6;
         self.set_data_output_control1(output_mask_val)?;
         
         // Configurar eventos de movimiento (activar pedómetro, calibración de sensores)
-        let motion_mask = motion_event_control::PEDOMETER_EN | 
-                        motion_event_control::ACCEL_CAL_EN | 
-                        motion_event_control::GYRO_CAL_EN;
+        let motion_mask = dmp::motion_event_control::PEDOMETER_EN | 
+                        dmp::motion_event_control::ACCEL_CAL_EN | 
+                        dmp::motion_event_control::GYRO_CAL_EN;
         self.set_motion_event_control(motion_mask)?;
         
         // Configurar escalas para DMP
@@ -60,9 +60,9 @@ where
         self.set_accel_fsr(4)?;   // 4g
         
         // Configurar tasas de muestreo
-        self.set_sensor_rate(Sensor::Accelerometer, 10)?;  // 50Hz
-        self.set_sensor_rate(Sensor::Gyroscope, 10)?;      // 50Hz
-        self.set_sensor_rate(Sensor::SixQ, 10)?;          // 50Hz
+        self.set_sensor_rate(types::OdrSensor::Accel, 10)?;  // 50Hz
+        self.set_sensor_rate(types::OdrSensor::Gyro, 10)?;      // 50Hz
+        self.set_sensor_rate(types::OdrSensor::Quat9, 10)?;          // 50Hz
         
         // Configurar umbral de Batch/FIFO
         self.set_fifo_watermark(1024)?; // Establecer cuando el FIFO está lleno a 1024 bytes
@@ -85,7 +85,7 @@ where
     }
 
     /// Configura una frecuencia de muestreo para el algoritmo BAC
-    pub fn configure_bac(&mut self, freq: DmpAlgoFreq) -> Result<(), Icm20948Error> {
+    pub fn configure_bac(&mut self, freq: dmp::AlgoFreq) -> Result<(), Icm20948Error> {
         // Configurar la tasa BAC (Business Activity Classification)
         self.set_bac_rate(freq)?;
         
@@ -93,12 +93,12 @@ where
         self.reset_bac_states()?;
         
         // Habilitar el evento BAC en la configuración de eventos de movimiento
-        let mut motion_mask = motion_event_control::PEDOMETER_EN | 
-                            motion_event_control::ACCEL_CAL_EN | 
-                            motion_event_control::GYRO_CAL_EN;
+        let mut motion_mask = dmp::motion_event_control::PEDOMETER_EN | 
+                            dmp::motion_event_control::ACCEL_CAL_EN | 
+                            dmp::motion_event_control::GYRO_CAL_EN;
                             
         // Añadir la clasificación de actividad
-        motion_mask |= motion_event_control::BAC_ACCEL_ONLY_EN;
+        motion_mask |= dmp::motion_event_control::BAC_ACCEL_ONLY_EN;
         
         self.set_motion_event_control(motion_mask)?;
         
