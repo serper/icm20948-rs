@@ -146,7 +146,7 @@ Las contribuciones son bienvenidas. Por favor, sigue estas pautas:
 
 ## Licencia
 
-[Inserta aquí la licencia del proyecto]
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Referencias
 
