@@ -180,7 +180,7 @@ where
     }
     
     fn configure(&mut self, _param: Option<u8>) -> Result<(), Self::Error> {
-        // En modo SPI podríamos configurar el modo (0, 1, 2, 3) si fuera necesario
+        // NO IMPLEMENTADO: En modo SPI podríamos configurar el modo (0, 1, 2, 3) si fuera necesario
         // o modificar la frecuencia según el valor de param
         Ok(())
     }
@@ -201,9 +201,3 @@ where
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    // Aquí se incluirían tests para las interfaces I2C y SPI
-}

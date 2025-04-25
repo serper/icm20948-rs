@@ -67,5 +67,13 @@ vendor/
 Embed.toml
 Arduino_ICM20948_DMP_Full-Function/
 SparkFun_ICM-20948_ArduinoLibrary/
+
+# Miscellaneous files
 NOTAS.txt
 USE.md
+CLAUDE.md
+
+# Additional files to ignore
+*.log
+*.tmp
+*.bak
