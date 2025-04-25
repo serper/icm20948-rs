@@ -30,7 +30,7 @@ Añade la siguiente línea a tu Cargo.toml:
 
 ```toml
 [dependencies]
-icm20948-rs = { git = "https://github.com/tuusuario/icm20948-rs" }
+icm20948-rs = { git = "https://github.com/serper/icm20948-rs" }
 ```
 
 ## Uso básico
