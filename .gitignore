@@ -72,6 +72,7 @@ SparkFun_ICM-20948_ArduinoLibrary/
 NOTAS.txt
 USE.md
 CLAUDE.md
+.gitignore
 
 # Additional files to ignore
 *.log
