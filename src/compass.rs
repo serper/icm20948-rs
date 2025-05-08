@@ -219,8 +219,6 @@ where
     
     /// Guarda la configuración del compás
     pub fn enable_compass_config(&mut self, config: CompassConfig) -> Result<(), Icm20948Error> {
-        // Simplemente guardamos la configuración del compás de momento
-        // En una implementación real, deberíamos guardarla en el estado del dispositivo
         self.base_state.compass_config = Some(config); // Guardar la configuración en el estado del dispositivo
 
         Ok(())
@@ -307,7 +305,6 @@ where
             _ => ak_reg::MODE,
         };
         
-        // self.write_secondary_i2c(SecondaryI2cChannel::Slave3, compass_i2c_addr, mode_reg, ak_val::POWER_DOWN)?;
         self.write_secondary_i2c(SecondaryI2cChannel::Slave3, compass_i2c_addr, mode_reg, ak_val::SINGLE_MEASURE)?;
         
         // Configurar para modo cíclico si es AK09912
@@ -663,8 +660,6 @@ where
         self.set_bank(0)?;
         
         // Esperar a que la transacción complete
-        // En este caso depende de la implementación específica
-        // Aquí podríamos usar un delay o una verificación de estado
         self.read_regs_raw(slave_reg::EXT_SENS_DATA_00, data)?;
         
         Ok(())
@@ -719,9 +714,7 @@ where
         
         // Cambiar al banco 0
         self.set_bank(0)?;
-        
-        // En una implementación real, deberíamos esperar a que la transacción complete
-        
+                
         Ok(())
     }
 }

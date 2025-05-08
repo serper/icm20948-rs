@@ -112,7 +112,6 @@ where
     device.write_reg::<bank2::Bank>(bank2::GYRO_CONFIG_2, 0x03)?;
 
     // Realizar la calibración del acelerómetro y giroscopio
-        // Realizar la calibración del acelerómetro y giroscopio
     const NUM_SAMPLES: usize = 100;
     
     // Arrays para almacenar las sumas acumuladas

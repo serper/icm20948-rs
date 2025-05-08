@@ -27,7 +27,7 @@ where
 
     /// Initializes the DMP driver.
     pub fn initialize(&mut self) -> Result<(), Icm20948Error> {
-        // 0. Setuup I2C controller for magnetometer
+        // 0. Setup I2C controller for magnetometer
         // Intentar activar el magnetómetro
         self.device.setup_compass(compass::CompassType::AK09916, 0x0C)?;
 
@@ -67,8 +67,6 @@ where
         
         self.device.reset_fifo()?;
 
-        // self.device.set_accel_lpf(controls::AccelLpfSetting::Lp246_0Hz)?;
-        // self.device.set_gyro_lpf(controls::GyroLpfSetting::Lp196_6Hz)?;
         self.device.set_accel_divider(4)?; // 4ms = 250Hz
         self.device.set_gyro_divider(4)?; // 4ms = 250Hz
 

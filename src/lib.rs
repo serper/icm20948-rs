@@ -28,7 +28,6 @@ pub use types::{GyroFullScale, AccelFullScale};
 pub use controls::{AccelLpfSetting, GyroLpfSetting, SampleRate};
 pub use conversion::{accel_raw_to_g, gyro_raw_to_dps, temp_raw_to_celsius};
 
-// Importaciones necesarias para resolver errores de compilación
 use crate::interface::{I2cInterface, SpiInterface};
 
 /// Crea un nuevo dispositivo ICM20948 usando el bus I2C

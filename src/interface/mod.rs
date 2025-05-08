@@ -74,7 +74,7 @@ where
     type Error = InterfaceError<E>;
     
     fn write_reg(&mut self, reg: u8, data: &[u8]) -> Result<(), Self::Error> {
-        let mut buffer = [0u8; 17]; // Buffer suficiente para la mayoría de operaciones
+        let mut buffer = [0u8; 17];
         buffer[0] = reg;
         
         if data.len() > 16 {
@@ -180,13 +180,12 @@ where
     }
     
     fn configure(&mut self, _param: Option<u8>) -> Result<(), Self::Error> {
-        // NO IMPLEMENTADO: En modo SPI podríamos configurar el modo (0, 1, 2, 3) si fuera necesario
-        // o modificar la frecuencia según el valor de param
+        // NO IMPLEMENTADO
         Ok(())
     }
 }
 
-// Implementación que permite convertir errores de la interfaz a Icm20948Error
+// Convertir errores de la interfaz a Icm20948Error
 impl<E> From<InterfaceError<E>> for Icm20948Error 
 where
     Icm20948Error: From<E>

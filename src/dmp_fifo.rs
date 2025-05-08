@@ -518,73 +518,7 @@ where
     D: DelayMs<u32>,
     // E: Debug,
     // Icm20948Error: From<E>,
-{
-    // /// Configura el FIFO del DMP según las especificaciones proporcionadas
-    // pub fn configure_dmp_fifo(&mut self, config: &DmpFifoConfig) -> Result<(), Icm20948Error> {
-    //     // Asegurarse de que el DMP está habilitado
-    //     if !self.is_firmware_loaded() {
-    //         return Err(Icm20948Error::InvalidOperation);
-    //     }
-
-    //     // Resetear el FIFO
-    //     self.device.reset_fifo()?;
-        
-    //     // Configurar las máscaras de salida de datos DMP
-    //     let mut data_out_ctl1: u16 = 0;
-        
-    //     if config.accel_enable {
-    //         data_out_ctl1 |= dmp::output_mask::ACCEL;
-    //     }
-        
-    //     if config.gyro_enable {
-    //         data_out_ctl1 |= dmp::output_mask::GYRO;
-    //     }
-        
-    //     if config.compass_enable {
-    //         data_out_ctl1 |= dmp::output_mask::CPASS;
-    //     }
-        
-    //     if config.quat6_enable {
-    //         data_out_ctl1 |= dmp::output_mask::QUAT6;
-    //     }
-        
-    //     if config.quat9_enable {
-    //         data_out_ctl1 |= dmp::output_mask::QUAT9;
-    //     }
-        
-    //     if config.geomag_enable {
-    //         data_out_ctl1 |= dmp::output_mask::GEOMAG;
-    //     }
-        
-    //     if config.pressure_enable {
-    //         data_out_ctl1 |= dmp::output_mask::PRESSURE;
-    //     }
-        
-    //     if config.als_enable {
-    //         data_out_ctl1 |= dmp::output_mask::ALS;
-    //     }
-        
-    //     if config.step_detector_enable {
-    //         data_out_ctl1 |= dmp::output_mask::PED_STEPDET;
-    //     }
-        
-    //     // Escribir configuración al DMP
-    //     let bytes = data_out_ctl1.to_be_bytes();
-    //     self.device.write_mems(dmp::data_output_control::DATA_OUT_CTL1, &bytes)?;
-        
-    //     // Configurar umbral de FIFO
-    //     let bytes = config.fifo_watermark.to_be_bytes();
-    //     self.device.write_mems(dmp::data_output_control::FIFO_WATERMARK, &bytes)?;
-        
-    //     // Configurar interrupción DMP
-    //     self.set_int1_assertion(1)?;
-        
-    //     // Habilitar FIFO
-    //     self.fifo_dmp_enable(true)?;
-        
-    //     Ok(())
-    // }
-    
+{   
     /// Reset el FIFO del DMP
     pub fn reset_fifo(&mut self) -> Result<(), Icm20948Error> {
         // Resetear el FIFO
@@ -626,15 +560,7 @@ where
         }
 
         // Procesar datos
-        // while fifo_count > 2 {                        
-            // Procesar los datos leídos
-            self.process_dmp_fifo_data(state, &mut fifo_count)?;
-        // }
-        // fifo_count = self.device.get_fifo_count()?;
-        // // DEBUG: Leer el FIFO y mostrarlo por consola en HEX
-        // let mut buffer = vec![0u8; fifo_count as usize];
-        // self.device.read_mems_regs::<bank0::Bank>(bank0::FIFO_R_W, &mut buffer[..fifo_count])?;
-        // println!("FIFO Data (count: {}): {:X?}", fifo_count, &buffer[..fifo_count]);
+        self.process_dmp_fifo_data(state, &mut fifo_count)?;
 
         Ok(())
     }
