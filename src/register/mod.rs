@@ -4,7 +4,7 @@
 
 /// Definir el trait para los bancos
 
-/// Definición de registros para cada Banco 
+/// Definición de registros para cada Banco
 /// Registros del Banco 0
 pub mod registers {
     pub trait RegisterBank {
@@ -23,7 +23,7 @@ pub mod registers {
         // Registros de identificación
         pub const WHO_AM_I: u8 = 0x00;
         pub const USER_CTRL: u8 = 0x03;
-        
+
         // Registros de estado y control
         pub const LP_CONFIG: u8 = 0x05;
         pub const PWR_MGMT_1: u8 = 0x06;
@@ -38,7 +38,7 @@ pub mod registers {
         pub const INT_STATUS: u8 = 0x19;
         pub const INT_STATUS_1: u8 = 0x1A;
         pub const INT_STATUS_2: u8 = 0x1B;
-        
+
         // Registros de acelerómetro
         pub const ACCEL_XOUT_H: u8 = 0x2D;
         pub const ACCEL_XOUT_L: u8 = 0x2E;
@@ -53,12 +53,12 @@ pub mod registers {
         pub const GYRO_ZOUT_H: u8 = 0x35;
         pub const GYRO_ZOUT_L: u8 = 0x36;
         pub const GYRO_YOUT_H: u8 = 0x37;
-        pub const GYRO_YOUT_L: u8 = 0x38;    
-        
+        pub const GYRO_YOUT_L: u8 = 0x38;
+
         // Registros de temperatura
         pub const TEMP_OUT_H: u8 = 0x39;
         pub const TEMP_OUT_L: u8 = 0x3A;
-        
+
         // Registros de FIFO
         pub const SINGLE_FIFO_PRIORITY_SEL: u8 = 0x26;
         pub const FIFO_EN_1: u8 = 0x66;
@@ -70,12 +70,12 @@ pub mod registers {
         pub const FIFO_R_W: u8 = 0x72;
         pub const HW_FIX_DISABLE: u8 = 0x75;
         pub const FIFO_CFG: u8 = 0x76;
-        
+
         // Registros de MEM
         pub const MEM_START_ADDR: u8 = 0x7C;
         pub const MEM_R_W: u8 = 0x7D;
         pub const MEM_BANK_SEL: u8 = 0x7E;
-        
+
         // Selección de banco de registros
         pub const REG_BANK_SEL: u8 = 0x7F;
     }
@@ -109,7 +109,7 @@ pub mod registers {
         // Registros de corrección de tiempo
         pub const TIMEBASE_CORRECTION_PLL: u8 = 0x28;
         pub const TIMEBASE_CORRECTION_RCOSC: u8 = 0x29;
-        
+
         // Selección de banco de registros
         pub const REG_BANK_SEL: u8 = 0x7F;
     }
@@ -132,7 +132,7 @@ pub mod registers {
         pub const XG_OFFS_USRH: u8 = 0x03;
         pub const XG_OFFS_USRL: u8 = 0x04;
         pub const YG_OFFS_USRH: u8 = 0x05;
-        pub const YG_OFFS_USRL: u8 = 0x06;    
+        pub const YG_OFFS_USRL: u8 = 0x06;
         pub const ZG_OFFS_USRH: u8 = 0x07;
         pub const ZG_OFFS_USRL: u8 = 0x08;
 
@@ -141,7 +141,7 @@ pub mod registers {
         pub const ACCEL_SMPLRT_DIV_2: u8 = 0x11;
         pub const ACCEL_CONFIG_1: u8 = 0x14;
         pub const ACCEL_CONFIG_2: u8 = 0x15;
-        
+
         pub const ACCEL_INTEL_CTRL: u8 = 0x18;
         pub const ACCEL_WOM_THR: u8 = 0x19;
         pub const PRS_ODR_CONFIG: u8 = 0x20;
@@ -150,7 +150,7 @@ pub mod registers {
 
         // Registros de detección de movimiento
         pub const WAKE_ON_MOTION_THRESHOLD: u8 = 0x13;
-        
+
         // Selección de banco de registros
         pub const REG_BANK_SEL: u8 = 0x7F;
     }
@@ -172,13 +172,13 @@ pub mod registers {
         pub const I2C_SLV0_REG: u8 = 0x04;
         pub const I2C_SLV0_CTRL: u8 = 0x05;
         pub const I2C_SLV0_DO: u8 = 0x06;
-        
+
         // Registros para comunicación con magnetómetro
         pub const I2C_SLV1_ADDR: u8 = 0x07;
         pub const I2C_SLV1_REG: u8 = 0x08;
         pub const I2C_SLV1_CTRL: u8 = 0x09;
         pub const I2C_SLV1_DO: u8 = 0x0A;
-        
+
         // Registros para dispositivos adicionales
         pub const I2C_SLV2_ADDR: u8 = 0x0B;
         pub const I2C_SLV2_REG: u8 = 0x0C;
@@ -193,7 +193,7 @@ pub mod registers {
         pub const I2C_SLV4_CTRL: u8 = 0x15;
         pub const I2C_SLV4_DO: u8 = 0x16;
         pub const I2C_SLV4_DI: u8 = 0x17;
-        
+
         // Selección de banco de registros
         pub const REG_BANK_SEL: u8 = 0x7F;
     }
@@ -211,8 +211,7 @@ pub mod dmp {
         pub const FIFO_WATERMARK: u16 = 31 * 16 + 14;
     }
 
-    pub mod odr
-    {
+    pub mod odr {
         pub const ACCEL: u16 = 11 * 16 + 14;
         pub const GYRO: u16 = 11 * 16 + 10;
         pub const CPASS: u16 = 11 * 16 + 6;
@@ -220,7 +219,7 @@ pub mod dmp {
         pub const QUAT6: u16 = 10 * 16 + 12;
         pub const QUAT9: u16 = 10 * 16 + 8;
         pub const PQUAT6: u16 = 10 * 16 + 4;
-        pub const GEOMAG: u16 = 10 * 16 + 0;
+        pub const GEOMAG: u16 = 10 * 16;
         pub const PRESSURE: u16 = 11 * 16 + 12;
         pub const GYRO_CALIBR: u16 = 11 * 16 + 8;
         pub const CPASS_CALIBR: u16 = 11 * 16 + 4;
@@ -235,12 +234,12 @@ pub mod dmp {
         pub const QUAT6: u16 = 8 * 16 + 12;
         pub const QUAT9: u16 = 8 * 16 + 8;
         pub const PQUAT6: u16 = 8 * 16 + 4;
-        pub const GEOMAG: u16 = 8 * 16 + 0;
+        pub const GEOMAG: u16 = 8 * 16;
         pub const PRESSURE: u16 = 9 * 16 + 12;
         pub const GYRO_CALIBR: u16 = 9 * 16 + 8;
         pub const CPASS_CALIBR: u16 = 9 * 16 + 4;
     }
-    
+
     // Batch mode
     pub mod bm_batch {
         pub const CNTR: u16 = 27 * 16;
@@ -275,7 +274,7 @@ pub mod dmp {
         pub const TIME_BUFFER: u16 = 112 * 16 + 14;
         pub const RADIUS_3D_THRESH_ANOMALY: u16 = 112 * 16 + 8;
     }
- 
+
     // Compass matrix
     pub mod cpass {
         pub const MTX_00: u16 = 23 * 16;
@@ -288,7 +287,7 @@ pub mod dmp {
         pub const MTX_21: u16 = 24 * 16 + 12;
         pub const MTX_22: u16 = 25 * 16;
     }
-    
+
     // Pedometer
     pub mod pedometer {
         pub const BP_B: u16 = 49 * 16 + 12;
@@ -309,8 +308,8 @@ pub mod dmp {
         pub const SB2: u16 = 60 * 16 + 14;
         pub const STPDET_TIMESTAMP: u16 = 18 * 16 + 8;
         pub const PEDSTEP_IND: u16 = 19 * 16 + 4;
-        pub const PED_Y_RATIO: u16 = 17 * 16 + 0;
-    }    
+        pub const PED_Y_RATIO: u16 = 17 * 16;
+    }
     // Wake on Motion
     pub mod wom {
         pub const ENABLE: u16 = 64 * 16 + 14;
@@ -318,26 +317,26 @@ pub mod dmp {
         pub const THRESHOLD: u16 = 64 * 16;
         pub const CNTR_TH: u16 = 64 * 16 + 12;
     }
-    
+
     // Gyro and Accel FSR
     pub mod fsr {
         pub const GYRO: u16 = 72 * 16 + 12;
-        pub const ACC: u16 = 30 * 16 + 0;
+        pub const ACC: u16 = 30 * 16;
         pub const ACC2: u16 = 79 * 16 + 4;
     }
-    
+
     // EIS authentication
     pub mod eis_auth {
         pub const INPUT: u16 = 160 * 16 + 4;
-        pub const OUTPUT: u16 = 160 * 16 + 0;
+        pub const OUTPUT: u16 = 160 * 16;
     }
-    
+
     // BAC and B2S
     pub mod bac {
         pub const BAC_RATE: u16 = 48 * 16 + 10;
         pub const B2S_RATE: u16 = 48 * 16 + 8;
     }
-    
+
     // B2S Matrix
     pub mod b2s_mtx {
         pub const B2S_MTX_00: u16 = 208 * 16;
@@ -350,22 +349,22 @@ pub mod dmp {
         pub const B2S_MTX_21: u16 = 209 * 16 + 12;
         pub const B2S_MTX_22: u16 = 210 * 16;
     }
-    
+
     // Orientation parameters
-    pub mod orientation {   
-        pub const Q0_QUAT6: u16 = 33 * 16 + 0;
+    pub mod orientation {
+        pub const Q0_QUAT6: u16 = 33 * 16;
         pub const Q1_QUAT6: u16 = 33 * 16 + 4;
         pub const Q2_QUAT6: u16 = 33 * 16 + 8;
         pub const Q3_QUAT6: u16 = 33 * 16 + 12;
     }
-    
+
     // BAC states
     pub mod bac_state {
-        pub const STATE: u16 = 179 * 16 + 0;
+        pub const STATE: u16 = 179 * 16;
         pub const STATE_PREV: u16 = 179 * 16 + 4;
-        pub const ACT_ON: u16 = 182 * 16 + 0;
-        pub const ACT_OFF: u16 = 183 * 16 + 0;
-        pub const STILL_S_F: u16 = 177 * 16 + 0;
+        pub const ACT_ON: u16 = 182 * 16;
+        pub const ACT_OFF: u16 = 183 * 16;
+        pub const STILL_S_F: u16 = 177 * 16;
         pub const RUN_S_F: u16 = 177 * 16 + 4;
         pub const DRIVE_S_F: u16 = 178 * 16 + 0;
         pub const WALK_S_F: u16 = 178 * 16 + 4;
@@ -397,34 +396,30 @@ pub mod dmp {
     }
 
     pub mod data_ready_status {
-        pub const GYRO: u16 = 0x0001;             // Gyro samples available
-        pub const ACCEL: u16 = 0x0002;            // Accel samples available
+        pub const GYRO: u16 = 0x0001; // Gyro samples available
+        pub const ACCEL: u16 = 0x0002; // Accel samples available
         pub const SECONDARY_COMPASS: u16 = 0x0008; // Secondary compass samples available
     }
 
-
-
-
-
     // Data output control 1 register bit definition
-        // 16-bit accel                                0x8000
-        // 16-bit gyro                                 0x4000
-        // 16-bit compass                              0x2000
-        // 16-bit ALS                                  0x1000
-        // 32-bit 6-axis quaternion                    0x0800
-        // 32-bit 9-axis quaternion + heading accuracy 0x0400
-        // 16-bit pedometer quaternion                 0x0200
-        // 32-bit Geomag rv + heading accuracy         0x0100
-        // 16-bit Pressure                             0x0080
-        // 32-bit calibrated gyro                      0x0040
-        // 32-bit calibrated compass                   0x0020
-        // Pedometer Step Detector                     0x0010
-        // Header 2                                    0x0008
-        // Pedometer Step Indicator Bit 2              0x0004
-        // Pedometer Step Indicator Bit 1              0x0002
-        // Pedometer Step Indicator Bit 0              0x0001
-        // Unsupported Sensors are 0xFFFF
-        
+    // 16-bit accel                                0x8000
+    // 16-bit gyro                                 0x4000
+    // 16-bit compass                              0x2000
+    // 16-bit ALS                                  0x1000
+    // 32-bit 6-axis quaternion                    0x0800
+    // 32-bit 9-axis quaternion + heading accuracy 0x0400
+    // 16-bit pedometer quaternion                 0x0200
+    // 32-bit Geomag rv + heading accuracy         0x0100
+    // 16-bit Pressure                             0x0080
+    // 32-bit calibrated gyro                      0x0040
+    // 32-bit calibrated compass                   0x0020
+    // Pedometer Step Detector                     0x0010
+    // Header 2                                    0x0008
+    // Pedometer Step Indicator Bit 2              0x0004
+    // Pedometer Step Indicator Bit 1              0x0002
+    // Pedometer Step Indicator Bit 0              0x0001
+    // Unsupported Sensors are 0xFFFF
+
     /// Output mask bits for data_output_control1
     pub mod output_mask {
         /// ACCEL_SET
@@ -498,11 +493,11 @@ pub mod dmp {
     // Activity Recognition
     pub mod activity_recognition {
         pub const RATE: u16 = 48 * 16 + 10;
-        pub const STATE: u16 = 179 * 16 + 0;
+        pub const STATE: u16 = 179 * 16;
         pub const STATE_PREV: u16 = 179 * 16 + 4;
-        pub const ACT_ON: u16 = 182 * 16 + 0;
-        pub const ACT_OFF: u16 = 183 * 16 + 0;
-        pub const STILL_S_F: u16 = 177 * 16 + 0;
+        pub const ACT_ON: u16 = 182 * 16;
+        pub const ACT_OFF: u16 = 183 * 16;
+        pub const STILL_S_F: u16 = 177 * 16;
         pub const RUN_S_F: u16 = 177 * 16 + 4;
         pub const DRIVE_S_F: u16 = 178 * 16 + 0;
         pub const WALK_S_F: u16 = 178 * 16 + 4;
@@ -531,7 +526,7 @@ pub mod dmp {
         pub const STATE_WRDBS_PREV: u16 = 185 * 16 + 8;
         pub const ACT_WRDBS_ON: u16 = 184 * 16 + 8;
         pub const ACT_WRDBS_OFF: u16 = 184 * 16 + 12;
-        pub const ACT_ON_OFF: u16  = 190 * 16 + 2;
+        pub const ACT_ON_OFF: u16 = 190 * 16 + 2;
         pub const PREV_ACT_ON_OFF: u16 = 188 * 16 + 2;
         pub const CNTR: u16 = 48 * 16 + 2;
     }
@@ -541,9 +536,8 @@ pub mod dmp {
         pub const DMPRATE_CNTR: u16 = 18 * 16 + 4;
     }
 
-
     // SMD
-    pub mod smd {   
+    pub mod smd {
         pub const SMD_VAR_TH: u16 = 141 * 16 + 12;
         pub const SMD_VAR_TH_DRIVE: u16 = 143 * 16 + 12;
         pub const SMD_DRIVE_TIMER_TH: u16 = 143 * 16 + 8;
@@ -610,7 +604,7 @@ pub mod dmp {
 // pub mod compass {
 //     // Direcciones del magnetómetro
 //     pub const AK09916_I2C_ADDR: u8 = 0x0C;
-    
+
 //     // Registros del AK09916
 //     pub const WHO_AM_I: u8 = 0x01;
 //     pub const ST1: u8 = 0x10;
@@ -638,14 +632,14 @@ pub mod dmp {
 /// Registros para magnetómetros AKM
 pub mod ak_reg {
     // Registros comunes para todos los AK
-    pub const WIA: u8 = 0x00;         // Identificación de dispositivo
-    pub const INFO: u8 = 0x01;        // Información
-    pub const STATUS: u8 = 0x02;      // Estado de datos
+    pub const WIA: u8 = 0x00; // Identificación de dispositivo
+    pub const INFO: u8 = 0x01; // Información
+    pub const STATUS: u8 = 0x02; // Estado de datos
     pub const MEASURE_DATA: u8 = 0x03; // Inicio de los datos medidos
-    pub const MODE: u8 = 0x0A;        // Registro de modo
-    pub const CNTL: u8 = 0x0A;        // Control (alias de MODE)
-    pub const ASTC: u8 = 0x0C;        // Control de self-test
-    
+    pub const MODE: u8 = 0x0A; // Registro de modo
+    pub const CNTL: u8 = 0x0A; // Control (alias de MODE)
+    pub const ASTC: u8 = 0x0C; // Control de self-test
+
     // AK09916 registers
     pub const AK09916_HXL: u8 = 0x11;
     pub const AK09916_HXH: u8 = 0x12;
@@ -653,7 +647,7 @@ pub mod ak_reg {
     pub const AK09916_HYH: u8 = 0x14;
     pub const AK09916_HZL: u8 = 0x15;
     pub const AK09916_HZH: u8 = 0x16;
-    
+
     // AK09916 específico
     pub const AK09916_STATUS1: u8 = 0x10;
     pub const AK09916_STATUS2: u8 = 0x18;
@@ -661,7 +655,7 @@ pub mod ak_reg {
     pub const AK09916_CNTL2: u8 = 0x31;
     pub const AK09916_CNTL3: u8 = 0x32;
     pub const AK09916_MEASURE_DATA: u8 = 0x11;
-    
+
     // Otras variantes de AK
     pub const AK09911_STATUS1: u8 = 0x10;
     pub const AK09911_STATUS2: u8 = 0x18;
@@ -669,16 +663,16 @@ pub mod ak_reg {
     pub const AK09911_CNTL2: u8 = 0x31;
     pub const AK09911_CNTL3: u8 = 0x32;
     pub const AK09911_MEASURE_DATA: u8 = 0x11;
-    
+
     pub const AK09912_STATUS1: u8 = 0x10;
     pub const AK09912_STATUS2: u8 = 0x18;
     pub const AK09912_CNTL1: u8 = 0x30;
     pub const AK09912_CNTL2: u8 = 0x31;
     pub const AK09912_CNTL3: u8 = 0x32;
     pub const AK09912_MEASURE_DATA: u8 = 0x11;
-    
+
     pub const AK8963_CNTL1: u8 = 0x0A;
-    
+
     // Sensibilidad
     pub const AK09911_SENSITIVITY: u8 = 0x60;
     pub const AK09912_SENSITIVITY: u8 = 0x60;
@@ -708,7 +702,7 @@ pub mod slave_reg {
     pub const I2C_SLV4_CTRL: u8 = 0x15;
     pub const I2C_SLV4_DO: u8 = 0x16;
     pub const I2C_SLV4_DI: u8 = 0x17;
-    
+
     pub const EXT_SENS_DATA_00: u8 = 0x3B;
     pub const I2C_MST_DELAY_CTRL: u8 = 0x02;
 }
