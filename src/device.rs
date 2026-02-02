@@ -3,7 +3,7 @@ use crate::types::{self, data_defs, AccelFullScale, GyroFullScale};
 
 // Actualizar importación de registros
 use crate::register::{registers::RegisterBank, registers::bank0, registers::bank2, registers::bank3, dmp};
-use embedded_hal::blocking::delay::DelayMs;
+use embedded_hal::delay::DelayNs;
 use crate::controls::AccelData;
 use crate::base::{SystemTimeSource, TimeSource};
 use crate::compass::CompassConfig;
@@ -160,7 +160,7 @@ impl<I: Clone, D: Clone> Clone for Icm20948<I, D> {
 impl<I, D, E> Icm20948<I, D>
 where
     I: Interface<Error = E>,
-    D: DelayMs<u32>,
+    D: DelayNs,
 {
     /// Create a new instance of Icm20948
     pub fn new(interface: I, delay: D) -> Self {

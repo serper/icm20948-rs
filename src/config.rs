@@ -3,7 +3,7 @@ use crate::dmp::DmpDriverIcm20948;
 use crate::register::dmp;
 use crate::types;
 use crate::interface::Interface;
-use embedded_hal::blocking::delay::DelayMs;
+use embedded_hal::delay::DelayNs;
 
 /// Enumeración para los rangos de escala completa del acelerómetro
 #[derive(Debug, Clone, Copy)]
@@ -35,7 +35,7 @@ pub enum GyroFullScale {
 impl<I, D, E> DmpDriverIcm20948<I, D>
 where
     I: Interface<Error = E>,
-    D: DelayMs<u32>,
+    D: DelayNs,
     Icm20948Error: From<E>,
 {
     /// Inicializa las configuraciones del DMP

@@ -152,9 +152,8 @@ impl Default for AugmentedState {
 /// Implementación de sensores aumentados para ICM20948
 impl<I, D, E> Icm20948<I, D>
 where
-    I: embedded_hal::blocking::i2c::Write<Error = E>
-        + embedded_hal::blocking::i2c::WriteRead<Error = E>,
-    D: embedded_hal::blocking::delay::DelayMs<u32>,
+    I: embedded_hal::i2c::I2c<Error = E>,
+    D: embedded_hal::delay::DelayNs,
 {
     /// Obtiene la gravedad a partir de datos de cuaternión de 6 ejes
     pub fn get_gravity_from_quat6(&mut self, quat: &Quaternion) -> GravityData {

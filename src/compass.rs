@@ -7,7 +7,7 @@ use crate::base::{SystemTimeSource, TimeSource};
 use crate::interface::Interface;
 use crate::{device::Icm20948, device::Icm20948Error, types::bits};
 use core::default::Default;
-use embedded_hal::blocking::delay::DelayMs;
+use embedded_hal::delay::DelayNs;
 
 // Import register
 use crate::register::ak_reg;
@@ -163,7 +163,7 @@ pub enum SecondaryI2cChannel {
 impl<I, D, E> Icm20948<I, D>
 where
     I: Interface<Error = E>,
-    D: DelayMs<u32>,
+    D: DelayNs,
 {
     /// Registra un compás auxiliar con el driver
     pub fn register_aux_compass(

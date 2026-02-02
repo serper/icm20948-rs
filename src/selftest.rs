@@ -10,7 +10,7 @@ use crate::register::registers::bank0;
 use crate::register::registers::bank1;
 use crate::register::registers::bank2;
 use crate::types;
-use embedded_hal::blocking::delay::DelayMs;
+use embedded_hal::delay::DelayNs;
 
 /// Estructura para almacenar los resultados del auto-test
 #[derive(Debug, Default, Clone, Copy)]
@@ -30,7 +30,7 @@ pub struct SelfTestResult {
 pub fn run_self_test<I, D, E>(device: &mut Icm20948<I, D>) -> Result<(bool, bool), Icm20948Error>
 where
     I: Interface<Error = E>,
-    D: DelayMs<u32>,
+    D: DelayNs,
 {
     // Guardar la configuración actual del sensor
     let orig_pwr_mgmt_1 = device.read_reg::<bank0::Bank>(bank0::PWR_MGMT_1)?;
@@ -95,7 +95,7 @@ pub fn calibrate<I, D, E>(
 ) -> Result<(), Icm20948Error>
 where
     I: Interface<Error = E>,
-    D: DelayMs<u32>,
+    D: DelayNs,
 {
     // Wake up el dispositivo
     device.wakeup()?;

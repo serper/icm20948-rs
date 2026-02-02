@@ -9,7 +9,7 @@ use crate::types::bits;
 use crate::controls::{AccelData, GyroData};
 use crate::interface::Interface;
 use crate::base::{SystemTimeSource, TimeSource};
-use embedded_hal::blocking::delay::DelayMs;
+use embedded_hal::delay::DelayNs;
 
 /// Error específico para operaciones del FIFO
 #[derive(Debug)]
@@ -123,7 +123,7 @@ const FIFO_HEADER_COMPASS: u8 = 0x08;
 impl<I, D, E> Icm20948<I, D>
 where
     I: Interface<Error = E>,
-    D: DelayMs<u32>,
+    D: DelayNs,
 {
     /// Activar/Desactivar el FIFO
     /// `enable`: true para activar, false para desactivar

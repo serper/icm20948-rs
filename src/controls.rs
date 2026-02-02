@@ -4,7 +4,7 @@ use crate::device::{Icm20948, Icm20948Error, ACCEL_AVAILABLE, GYRO_AVAILABLE, SE
 use crate::interface::Interface;
 use crate::register::registers::{bank0, bank2};
 use crate::types::bits;
-use embedded_hal::blocking::delay::DelayMs;
+use embedded_hal::delay::DelayNs;
 
 /// Factores de conversión para los diferentes rangos de escala completa del acelerómetro
 pub const ACCEL_SCALE_FACTOR_2G: f32 = 16384.0;  // LSB/g
@@ -145,7 +145,7 @@ pub enum GyroLpfSetting {
 impl<I, D, E> Icm20948<I, D>
 where
     I: Interface<Error = E>,
-    D: DelayMs<u32>,
+    D: DelayNs,
 {
     /// Activa o desactiva el acelerómetro
     pub fn enable_accelerometer(&mut self, enable: bool) -> Result<(), Icm20948Error> {

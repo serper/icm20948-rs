@@ -306,7 +306,8 @@ pub mod dmp_packet_bytes2 {
 //     PedometerStepIndicatorBits,
 // }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum Sensor {
     Accelerometer,
     Gyroscope,
@@ -453,6 +454,8 @@ pub const SENSORTOCONTROLBITS: &[u16] = &[
     0x4048, // 43 Raw Gyr
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum OdrSensor {
     Accel,
     Gyro,
@@ -467,6 +470,7 @@ pub enum OdrSensor {
     CpassCalibr,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Activity {
     Drive = 0x01,
     Walk = 0x02,

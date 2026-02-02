@@ -5,7 +5,7 @@ use crate::dmp::DmpDriverIcm20948;
 use crate::register::registers::bank0;
 use crate::types::{bits, dmp_header, dmp_header2, dmp_packet_bytes, dmp_packet_bytes2};
 use crate::interface::Interface;
-use embedded_hal::blocking::delay::DelayMs;
+use embedded_hal::delay::DelayNs;
 use core::fmt::Debug;
 
 pub const PI: f32 = 3.14159265358979323846;
@@ -515,7 +515,7 @@ pub fn process_linear_accel(fifo_data: &[u8]) -> Option<[f32; 3]> {
 impl<I, D, E> DmpDriverIcm20948<I, D>
 where
     I: Interface<Error = E>,
-    D: DelayMs<u32>,
+    D: DelayNs,
     // E: Debug,
     // Icm20948Error: From<E>,
 {   
@@ -912,5 +912,40 @@ where
         self.device.write_mems_reg::<bank0::Bank>(bank0::INT_ENABLE, int_enable)?;
         
         Ok(())
+    }
+
+    /// Lee los registros de estado de interrupción para limpiar el latch.
+    pub fn clear_int_status(&mut self) -> Result<(), Icm20948Error> {
+        let _ = self
+            .device
+            .read_mems_reg::<bank0::Bank>(bank0::INT_STATUS)?;
+        let _ = self
+            .device
+            .read_mems_reg::<bank0::Bank>(bank0::DMP_INT_STATUS)?;
+        Ok(())
+    }
+}
+
+impl DmpFifoState {
+    pub fn clear_data(&mut self) {
+        self.accel_data = None;
+        self.gyro_data = None;
+        self.gyro_bias = None;
+        self.compass_data = None;
+        self.quaternion6 = None;
+        self.quaternion9 = None;
+        self.quaternionp6 = None;
+        self.geomag_data = None;
+        self.pressure_data = None;
+        self.gyro_calibr = None;
+        self.compass_calibr = None;
+        self.pedometer_timestamp = None;
+        self.accel_accuracy = None;
+        self.gyro_accuracy = None;
+        self.compass_accuracy = None;
+        self.fsync = None;
+        self.pickup_state = None;
+        self.activity_recognition = None;
+        self.secondary_on_off = None;
     }
 }
