@@ -136,7 +136,7 @@ pub mod scale_factor {
     pub const AK8963_16BIT: i32 = 161061273; // 0.15 µT * (1 << 30)
     pub const AK09911: i32 = 644245094; // 0.6 µT * (1 << 30)
     pub const AK09912: i32 = 161061273; // 0.15 µT * (1 << 30)
-    pub const AK09916: i32 = 161061273; // 0.15 µT * (1 << 30)
+    pub const AK09916: i32 = 1073741824; // 1.0 * (1 << 30) - Identity scale for DMP fusion
 }
 
 /// Valores específicos para registros del magnetómetro
@@ -253,6 +253,7 @@ pub mod dmp_header2 {
     pub const COMPASS_ACCURACY: u16 = 0x1000; // Compass accuracy when changes (HEADER2)
     pub const GYRO_ACCURACY: u16 = 0x2000; // Gyro accuracy when changes (HEADER2)
     pub const ACCEL_ACCURACY: u16 = 0x4000; // Accel accuracy when changes (HEADER2)
+    pub const SCREEN_ROTATION: u16 = 0x0020; // Screen Rotation (HEADER2)
 }
 
 #[allow(non_upper_case_globals)]
@@ -287,24 +288,9 @@ pub mod dmp_packet_bytes2 {
     pub const BATCH_MODE: usize = 2;
     pub const ACTIVITY_RECOG: usize = 6;
     pub const SECONDARY_ON_OFF: usize = 2;
+    pub const SCREEN_ROTATION: usize = 2; // Screen Rotation event is 2 bytes
+    pub const ODR_CNT_GYRO: usize = 2;
 }
-
-// pub enum Sensor {
-//     Accel,
-//     Gyro,
-//     Cpass,
-//     Als,
-//     Quat6,
-//     Quat9,
-//     Pquat6,
-//     Geomag,
-//     Pressure,
-//     GyroCalibr,
-//     CpassCalibr,
-//     StepDetector,
-//     Header2,
-//     PedometerStepIndicatorBits,
-// }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -330,6 +316,7 @@ pub enum Sensor {
     Orientation,
     B2S,
     RawMagnetometer,
+    ScreenRotation,
     Max,
 }
 
@@ -416,7 +403,7 @@ pub const SENSORTOCONTROLBITS: &[u16] = &[
     0x1008, // 5  Light
     0x0088, // 6  Pressure
     0xFFFF, // 7  Temperature
-    0xFFFF, // 8  Proximity <----------- fixme
+    0xFFFF, // 8  Proximity
     0x0808, // 9  Gravity
     0x8808, // 10 Linear Acceleration
     0x0408, // 11 Rotation Vector
@@ -427,7 +414,7 @@ pub const SENSORTOCONTROLBITS: &[u16] = &[
     0x4008, // 16 Gyroscope Uncalibrated
     0x0000, // 17 Significant Motion
     0x0018, // 18 Step Detector
-    0x0010, // 19 Step Counter <----------- fixme
+    0x0010, // 19 Step Counter
     0x0108, // 20 Geomagnetic Rotation Vector
     0xFFFF, // 21 ANDROID_SENSOR_HEART_RATE,
     0xFFFF, // 22 ANDROID_SENSOR_PROXIMITY,
@@ -447,11 +434,19 @@ pub const SENSORTOCONTROLBITS: &[u16] = &[
     0x4008, // 36 ANDROID_SENSOR_WAKEUP_GYROSCOPE_UNCALIBRATED,
     0x0018, // 37 ANDROID_SENSOR_WAKEUP_STEP_DETECTOR,
     0x0010, // 38 ANDROID_SENSOR_WAKEUP_STEP_COUNTER,
-    0x0108, // 39 ANDROID_SENSOR_WAKEUP_GEOMAGNETIC_ROTATION_VECTOR
+    0x0108, // 39 ANDROID_SENSOR_WAKEUP_GEOMAGNETIC_ROTATION_VECTOR,
     0xFFFF, // 40 ANDROID_SENSOR_WAKEUP_HEART_RATE,
     0x0000, // 41 ANDROID_SENSOR_WAKEUP_TILT_DETECTOR,
     0x8008, // 42 Raw Acc
     0x4048, // 43 Raw Gyr
+    0xFFFF, // 44 NumMax
+    0xFFFF, // 45 B2S
+    0x0408, // 46 FlipPickup
+    0x0008, // 47 ActivityClassification
+    0x0008, // 48 ScreenRotation
+    0xFFFF, // 49 SelfTest
+    0xFFFF, // 50 Setup
+    0xFFFF, // 51 GeneralSensorsMax
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

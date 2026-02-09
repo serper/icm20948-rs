@@ -4,6 +4,7 @@ use crate::device::{Icm20948, Icm20948Error, ACCEL_AVAILABLE, GYRO_AVAILABLE, SE
 use crate::interface::Interface;
 use crate::register::registers::{bank0, bank2};
 use crate::types::bits;
+use log;
 use embedded_hal::delay::DelayNs;
 
 /// Factores de conversión para los diferentes rangos de escala completa del acelerómetro
@@ -233,7 +234,17 @@ where
     
     /// Configura el modo de bajo consumo o alto rendimiento
     pub fn set_low_power_mode(&mut self, low_power: bool) -> Result<(), Icm20948Error> {
-        self.set_lowpower_or_highperformance(if low_power { 1 } else { 0 })
+        if low_power {
+            if self.base_state.firmware_loaded {
+                log::warn!(
+                    "Ignoring low_power=true while DMP is active; forcing low-noise mode"
+                );
+                return self.force_low_noise();
+            }
+            self.set_lowpower_or_highperformance(1)
+        } else {
+            self.force_low_noise()
+        }
     }
 
     /// Set LPF for accelerometer

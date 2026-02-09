@@ -142,8 +142,8 @@ pub mod registers {
         pub const ACCEL_CONFIG_1: u8 = 0x14;
         pub const ACCEL_CONFIG_2: u8 = 0x15;
 
-        pub const ACCEL_INTEL_CTRL: u8 = 0x18;
-        pub const ACCEL_WOM_THR: u8 = 0x19;
+        pub const ACCEL_INTEL_CTRL: u8 = 0x12;
+        pub const ACCEL_WOM_THR: u8 = 0x13;
         pub const PRS_ODR_CONFIG: u8 = 0x20;
         pub const PRGM_START_ADDRH: u8 = 0x50;
         pub const MOD_CTRL_USR: u8 = 0x54;
@@ -358,6 +358,13 @@ pub mod dmp {
         pub const Q3_QUAT6: u16 = 33 * 16 + 12;
     }
 
+    // 9-axis thresholds
+    pub mod nine_axis_thr {
+        pub const MAGN_THR_9X: u16 = 80 * 16;
+        pub const MAGN_LPF_THR_9X: u16 = 80 * 16 + 8;
+        pub const QFB_THR_9X: u16 = 80 * 16 + 12;
+    }
+
     // BAC states
     pub mod bac_state {
         pub const STATE: u16 = 179 * 16;
@@ -454,6 +461,7 @@ pub mod dmp {
 
     /// Output mask bits for data_output_control2
     pub mod output_mask2 {
+        pub const SCREEN_ROTATION: u16 = 0x0020;
         pub const SECONDARY_ON_OFF: u16 = 0x0040;
         pub const ACTIVITY_RECOGNITION_BAC: u16 = 0x0080;
         pub const BATCH_MODE_ENABLE: u16 = 0x0100;
@@ -474,6 +482,10 @@ pub mod dmp {
         pub const PEDOMETER_INT_EN: u16 = 0x2000;
         /// SMD_EN
         pub const SMD_EN: u16 = 0x0800;
+        /// BTS_EN (Bring-To-See)
+        pub const BTS_EN: u16 = 0x0020;
+        /// FLIP_PICKUP_EN
+        pub const FLIP_PICKUP_EN: u16 = 0x0010;
         /// ACCEL_CAL_EN
         pub const ACCEL_CAL_EN: u16 = 0x0200;
         /// GYRO_CAL_EN

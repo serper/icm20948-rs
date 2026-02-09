@@ -2,11 +2,14 @@ use crate::interface::Interface;
 use crate::types::{self, data_defs, AccelFullScale, GyroFullScale};
 
 // Actualizar importación de registros
-use crate::register::{registers::RegisterBank, registers::bank0, registers::bank2, registers::bank3, dmp};
-use embedded_hal::delay::DelayNs;
-use crate::controls::AccelData;
 use crate::base::{SystemTimeSource, TimeSource};
 use crate::compass::CompassConfig;
+use crate::controls::AccelData;
+use crate::register::{
+    dmp, registers::bank0, registers::bank1, registers::bank2, registers::bank3,
+    registers::RegisterBank,
+};
+use embedded_hal::delay::DelayNs;
 
 // Import bits from types
 use crate::types::bits;
@@ -68,6 +71,12 @@ pub struct BaseState {
     pub firmware_loaded: bool,
     pub compass_sens: [i16; 3],
     pub compass_asa: [u8; 3],
+    /// Mounting matrix for accel/gyro (row-major, signed chars)
+    pub mounting_matrix: [i8; 9],
+    /// Soft-iron matrix for compass (row-major, Q30)
+    pub soft_iron_matrix: [i32; 9],
+    /// Scale/Skew matrix for accel/gyro (row-major, floats, default Identity)
+    pub accel_gyro_scale_matrix: [f32; 9],
     pub temperature_c: f32,
     pub compass_config: Option<CompassConfig>,
     pub lp_en_support: u8,
@@ -96,7 +105,10 @@ impl Default for BaseState {
             firmware_loaded: false,
             compass_sens: [0, 0, 0],
             compass_asa: [0, 0, 0],
+            mounting_matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+            soft_iron_matrix: [1i32 << 30, 0, 0, 0, 1i32 << 30, 0, 0, 0, 1i32 << 30],
             temperature_c: 0.0,
+            accel_gyro_scale_matrix: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
             compass_config: None,
             lp_en_support: 0,
             chip_lp_ln_mode: 0,
@@ -133,7 +145,7 @@ pub const ACCEL_AVAILABLE: u8 = 0x2;
 pub const SECONDARY_COMPASS_AVAILABLE: u8 = 0x8;
 pub const INV_NEEDS_ACCEL_MASK: u32 = 0xE29E8E0A;
 pub const INV_NEEDS_GYRO_MASK: u32 = 0xE6018E18;
-pub const INV_NEEDS_COMPASS_MASK: u32 = 0x8310480C;
+pub const INV_NEEDS_COMPASS_MASK: u32 = 0x8310480C | 0x800; // Added bit 11 for RotationVector
 pub const INV_NEEDS_ACCEL_MASK1: u32 = 0x000006A8;
 pub const INV_NEEDS_GYRO_MASK1: u32 = 0x00000818;
 pub const INV_NEEDS_COMPASS_MASK1: u32 = 0x00000084;
@@ -145,7 +157,7 @@ pub const CHIP_LOW_POWER_ICM20948: u8 = 1;
 pub const CHIP_LOW_POWER_WOI2C_ICM20948: u8 = 2;
 
 // Constante para divider de FIFO
-pub const FIFO_DIVIDER: u8 = 19;  // 1125Hz/20 = 56.25Hz
+pub const FIFO_DIVIDER: u8 = 19; // 1125Hz/20 = 56.25Hz
 
 impl<I: Clone, D: Clone> Clone for Icm20948<I, D> {
     fn clone(&self) -> Self {
@@ -174,45 +186,57 @@ where
     pub fn read_reg<B: RegisterBank>(&mut self, reg: u8) -> Result<u8, Icm20948Error> {
         // Seleccionar el banco correcto
         self.set_bank(B::BANK)?;
-        
+
         // Leer el registro
         let mut data = [0u8];
-        self.interface.read_reg(reg, &mut data)
+        self.interface
+            .read_reg(reg, &mut data)
             .map_err(|e: E| Icm20948Error::from_error(e))?;
-        
+
         Ok(data[0])
     }
 
     /// Método genérico para leer múltiples registros de un banco específico
-    pub fn read_regs<B: RegisterBank>(&mut self, reg: u8, data: &mut [u8]) -> Result<(), Icm20948Error> {
+    pub fn read_regs<B: RegisterBank>(
+        &mut self,
+        reg: u8,
+        data: &mut [u8],
+    ) -> Result<(), Icm20948Error> {
         // Seleccionar el banco correcto
         self.set_bank(B::BANK)?;
-        
+
         // Leer los registros
-        self.interface.read_reg(reg, data)
+        self.interface
+            .read_reg(reg, data)
             .map_err(|e| Icm20948Error::from_error(e))
     }
-    
+
     /// Método genérico para escribir en un registro de un banco específico
     pub fn write_reg<B: RegisterBank>(&mut self, reg: u8, value: u8) -> Result<(), Icm20948Error> {
         // Seleccionar el banco correcto
         self.set_bank(B::BANK)?;
-        
+
         // Escribir en el registro
-        self.interface.write_reg(reg, &[value])
+        self.interface
+            .write_reg(reg, &[value])
             .map_err(|e| Icm20948Error::from_error(e))
     }
-    
+
     /// Método genérico para escribir en múltiples registros de un banco específico
-    pub fn write_regs<B: RegisterBank>(&mut self, reg: u8, values: &[u8]) -> Result<(), Icm20948Error> {
+    pub fn write_regs<B: RegisterBank>(
+        &mut self,
+        reg: u8,
+        values: &[u8],
+    ) -> Result<(), Icm20948Error> {
         // Seleccionar el banco correcto
         self.set_bank(B::BANK)?;
-        
+
         // Escribir en los registros
-        self.interface.write_reg(reg, values)
+        self.interface
+            .write_reg(reg, values)
             .map_err(|e| Icm20948Error::from_error(e))
     }
-    
+
     /// Método genérico para modificar bits específicos de un registro en un banco específico
     pub fn modify_reg<B: RegisterBank, F>(&mut self, reg: u8, f: F) -> Result<(), Icm20948Error>
     where
@@ -220,10 +244,10 @@ where
     {
         // Leer el valor actual
         let value = self.read_reg::<B>(reg)?;
-        
+
         // Aplicar la modificación
         let new_value = f(value);
-        
+
         // Escribir el nuevo valor
         self.write_reg::<B>(reg, new_value)
     }
@@ -236,7 +260,7 @@ where
         if (power_state & CHIP_AWAKE) == 0 {
             self.set_chip_power_state(CHIP_AWAKE, 1)?;
         }
-        
+
         // Desactivar CHIP_LP_ENABLE si es necesario
         if (power_state & CHIP_LP_ENABLE) != 0 {
             self.set_chip_power_state(CHIP_LP_ENABLE, 0)?;
@@ -244,22 +268,27 @@ where
 
         // Seleccionar el banco correcto
         self.set_bank(B::BANK)?;
-        
+
         // Leer el registro
         let mut data = [0u8];
-        self.interface.read_reg(reg, &mut data)
+        self.interface
+            .read_reg(reg, &mut data)
             .map_err(|e: E| Icm20948Error::from_error(e))?;
 
         // Restaurar el estado de LP_ENABLE si es necesario
-        if (power_state & CHIP_LP_ENABLE) == 0 {
+        if (power_state & CHIP_LP_ENABLE) != 0 {
             self.set_chip_power_state(CHIP_LP_ENABLE, 1)?;
         }
-        
+
         Ok(data[0])
     }
 
     /// Método genérico para leer múltiples registros de un banco específico
-    pub fn read_mems_regs<B: RegisterBank>(&mut self, reg: u8, data: &mut [u8]) -> Result<(), Icm20948Error> {
+    pub fn read_mems_regs<B: RegisterBank>(
+        &mut self,
+        reg: u8,
+        data: &mut [u8],
+    ) -> Result<(), Icm20948Error> {
         // Salvamos el estado de power
         let power_state = self.base_state.wake_state;
 
@@ -267,7 +296,7 @@ where
         if (power_state & CHIP_AWAKE) == 0 {
             self.set_chip_power_state(CHIP_AWAKE, 1)?;
         }
-        
+
         // Desactivar CHIP_LP_ENABLE si es necesario
         if (power_state & CHIP_LP_ENABLE) != 0 {
             self.set_chip_power_state(CHIP_LP_ENABLE, 0)?;
@@ -275,21 +304,30 @@ where
 
         // Seleccionar el banco correcto
         self.set_bank(B::BANK)?;
-        
+
         // Leer los registros
-        self.interface.read_reg(reg, data)
-            .map_err(|e| Icm20948Error::from_error(e))?;
+        let result = self
+            .interface
+            .read_reg(reg, data)
+            .map_err(|e| Icm20948Error::from_error(e));
 
         // Restaurar el estado de LP_ENABLE si es necesario
-        if (power_state & CHIP_LP_ENABLE) == 0 {
-            self.set_chip_power_state(CHIP_LP_ENABLE, 1)?;
+        if (power_state & CHIP_LP_ENABLE) != 0 {
+            let restore_result = self.set_chip_power_state(CHIP_LP_ENABLE, 1);
+            if result.is_ok() {
+                restore_result?;
+            }
         }
 
-        Ok(())
+        result
     }
-    
+
     /// Método genérico para escribir en un registro de un banco específico
-    pub fn write_mems_reg<B: RegisterBank>(&mut self, reg: u8, value: u8) -> Result<(), Icm20948Error> {
+    pub fn write_mems_reg<B: RegisterBank>(
+        &mut self,
+        reg: u8,
+        value: u8,
+    ) -> Result<(), Icm20948Error> {
         // Salvamos el estado de power
         let power_state = self.base_state.wake_state;
 
@@ -297,7 +335,7 @@ where
         if (power_state & CHIP_AWAKE) == 0 {
             self.set_chip_power_state(CHIP_AWAKE, 1)?;
         }
-        
+
         // Desactivar CHIP_LP_ENABLE si es necesario
         if (power_state & CHIP_LP_ENABLE) != 0 {
             self.set_chip_power_state(CHIP_LP_ENABLE, 0)?;
@@ -305,21 +343,30 @@ where
 
         // Seleccionar el banco correcto
         self.set_bank(B::BANK)?;
-        
+
         // Escribir en el registro
-        self.interface.write_reg(reg, &[value])
-            .map_err(|e| Icm20948Error::from_error(e))?;
+        let result = self
+            .interface
+            .write_reg(reg, &[value])
+            .map_err(|e| Icm20948Error::from_error(e));
 
         // Restaurar el estado de LP_ENABLE si es necesario
-        if (power_state & CHIP_LP_ENABLE) == 0 {
-            self.set_chip_power_state(CHIP_LP_ENABLE, 1)?;
+        if (power_state & CHIP_LP_ENABLE) != 0 {
+            let restore_result = self.set_chip_power_state(CHIP_LP_ENABLE, 1);
+            if result.is_ok() {
+                restore_result?;
+            }
         }
 
-        Ok(())
+        result
     }
-    
+
     /// Método genérico para escribir en múltiples registros de un banco específico
-    pub fn write_mems_regs<B: RegisterBank>(&mut self, reg: u8, values: &[u8]) -> Result<(), Icm20948Error> {
+    pub fn write_mems_regs<B: RegisterBank>(
+        &mut self,
+        reg: u8,
+        values: &[u8],
+    ) -> Result<(), Icm20948Error> {
         // Salvamos el estado de power
         let power_state = self.base_state.wake_state;
 
@@ -327,7 +374,7 @@ where
         if (power_state & CHIP_AWAKE) == 0 {
             self.set_chip_power_state(CHIP_AWAKE, 1)?;
         }
-        
+
         // Desactivar CHIP_LP_ENABLE si es necesario
         if (power_state & CHIP_LP_ENABLE) != 0 {
             self.set_chip_power_state(CHIP_LP_ENABLE, 0)?;
@@ -335,21 +382,30 @@ where
 
         // Seleccionar el banco correcto
         self.set_bank(B::BANK)?;
-        
+
         // Escribir en los registros
-        self.interface.write_reg(reg, values)
-            .map_err(|e| Icm20948Error::from_error(e))?;
-            
+        let result = self
+            .interface
+            .write_reg(reg, values)
+            .map_err(|e| Icm20948Error::from_error(e));
+
         // Restaurar el estado de LP_ENABLE si es necesario
-        if (power_state & CHIP_LP_ENABLE) == 0 {
-            self.set_chip_power_state(CHIP_LP_ENABLE, 1)?;
+        if (power_state & CHIP_LP_ENABLE) != 0 {
+            let restore_result = self.set_chip_power_state(CHIP_LP_ENABLE, 1);
+            if result.is_ok() {
+                restore_result?;
+            }
         }
 
-        Ok(())
+        result
     }
-    
+
     /// Método genérico para modificar bits específicos de un registro en un banco específico
-    pub fn modify_mems_reg<B: RegisterBank, F>(&mut self, reg: u8, f: F) -> Result<(), Icm20948Error>
+    pub fn modify_mems_reg<B: RegisterBank, F>(
+        &mut self,
+        reg: u8,
+        f: F,
+    ) -> Result<(), Icm20948Error>
     where
         F: FnOnce(u8) -> u8,
     {
@@ -360,7 +416,7 @@ where
         if (power_state & CHIP_AWAKE) == 0 {
             self.set_chip_power_state(CHIP_AWAKE, 1)?;
         }
-        
+
         // Desactivar CHIP_LP_ENABLE si es necesario
         if (power_state & CHIP_LP_ENABLE) != 0 {
             self.set_chip_power_state(CHIP_LP_ENABLE, 0)?;
@@ -368,34 +424,40 @@ where
 
         // Leer el valor actual
         let value = self.read_reg::<B>(reg)?;
-        
+
         // Aplicar la modificación
         let new_value = f(value);
-        
+
         // Escribir el nuevo valor
-        self.write_reg::<B>(reg, new_value)?;
+        let result = self.write_reg::<B>(reg, new_value);
 
         // Restaurar el estado de LP_ENABLE si es necesario
-        if (self.base_state.wake_state & CHIP_LP_ENABLE) == 0 {
-            self.set_chip_power_state(CHIP_LP_ENABLE, 1)?;
+        if (power_state & CHIP_LP_ENABLE) != 0 {
+            let restore_result = self.set_chip_power_state(CHIP_LP_ENABLE, 1);
+            if result.is_ok() {
+                restore_result?;
+            }
         }
 
-        Ok(())
+        result
     }
 
     /// Método para comprobar si el registro necesita poner el chip en modo de bajo consumo
     pub fn check_chip_lp_mode(&mut self, reg: u8) -> Result<bool, Icm20948Error> {
         match reg {
-            bank0::LP_CONFIG | bank0::PWR_MGMT_1 | bank0::PWR_MGMT_2 |
-            bank0::INT_PIN_CFG | bank0::INT_ENABLE | bank0::FIFO_COUNTH |
-            bank0::FIFO_COUNTL | bank0::FIFO_R_W => {
-                Ok(self.is_batch_mode())
-            },
-            bank0::FIFO_CFG |
-            bank0::MEM_BANK_SEL | bank0::REG_BANK_SEL | bank0::INT_STATUS |
-            bank0::DMP_INT_STATUS => {
-                Ok(false)
-            },
+            bank0::LP_CONFIG
+            | bank0::PWR_MGMT_1
+            | bank0::PWR_MGMT_2
+            | bank0::INT_PIN_CFG
+            | bank0::INT_ENABLE
+            | bank0::FIFO_COUNTH
+            | bank0::FIFO_COUNTL
+            | bank0::FIFO_R_W => Ok(self.is_batch_mode()),
+            bank0::FIFO_CFG
+            | bank0::MEM_BANK_SEL
+            | bank0::REG_BANK_SEL
+            | bank0::INT_STATUS
+            | bank0::DMP_INT_STATUS => Ok(false),
             _ => Ok(true),
         }
     }
@@ -404,7 +466,7 @@ where
     pub fn get_batch_mode_status(&mut self) -> Result<bool, Icm20948Error> {
         let mut reg = [0u8; 2];
         self.read_mems(dmp::data_output_control::DATA_OUT_CTL2, &mut reg)
-                .map_err(|_| Icm20948Error::InterfaceError)?;
+            .map_err(|_| Icm20948Error::InterfaceError)?;
         Ok((u16::from_be_bytes(reg) & dmp::output_mask2::BATCH_MODE_ENABLE) != 0)
     }
 
@@ -414,27 +476,39 @@ where
     }
 
     /// Método para leer registros con préstamo temporal del I2C
-    pub fn read_regs_raw<'a>(&mut self, reg: u8, data: &'a mut [u8]) -> Result<&'a mut [u8], Icm20948Error> {
-        self.interface.read_reg(reg, data).map_err(|_| Icm20948Error::InterfaceError)?;
+    pub fn read_regs_raw<'a>(
+        &mut self,
+        reg: u8,
+        data: &'a mut [u8],
+    ) -> Result<&'a mut [u8], Icm20948Error> {
+        self.interface
+            .read_reg(reg, data)
+            .map_err(|_| Icm20948Error::InterfaceError)?;
         Ok(data)
     }
-    
+
     /// Método para escribir registros con préstamo temporal del I2C
     pub fn write_regs_raw<'a>(&mut self, reg: u8, data: &'a [u8]) -> Result<(), Icm20948Error> {
-        self.interface.write_reg(reg, &data).map_err(|_| Icm20948Error::InterfaceError)
+        self.interface
+            .write_reg(reg, &data)
+            .map_err(|_| Icm20948Error::InterfaceError)
     }
 
     /// Leer un registro
     pub fn read_reg_raw(&mut self, reg: u8) -> Result<u8, Icm20948Error> {
         let mut buf = [0u8];
-        self.interface.read_reg(reg, &mut buf).map_err(|_| Icm20948Error::InterfaceError)?;
+        self.interface
+            .read_reg(reg, &mut buf)
+            .map_err(|_| Icm20948Error::InterfaceError)?;
 
         Ok(buf[0])
     }
-    
+
     /// Escribir a un registro
     pub fn write_reg_raw(&mut self, reg: u8, value: u8) -> Result<(), Icm20948Error> {
-        self.interface.write_reg(reg, &[value]).map_err(|_| Icm20948Error::InterfaceError)?;
+        self.interface
+            .write_reg(reg, &[value])
+            .map_err(|_| Icm20948Error::InterfaceError)?;
 
         Ok(())
     }
@@ -445,22 +519,24 @@ where
             return Err(Icm20948Error::InvalidParameter);
         }
 
-        if self.base_state.last_bank_selected == bank {
-            return Ok(());
-        }
+        // Force Write - No Read-Modify-Write to avoid potential garbage
+        // Bits 3:0 and 7:6 are reserved, so writing 0 is safe/expected
+        let val = (bank & 0x03) << 4;
+        self.write_reg_raw(bank0::REG_BANK_SEL, val)?;
         self.base_state.last_bank_selected = bank;
-        
-        let mut reg = self.read_reg_raw(bank0::REG_BANK_SEL)?;
-        reg &= 0xCF;
-        reg |= (bank & 0x03) << 4;
-        self.write_reg_raw(bank0::REG_BANK_SEL, reg)?;
+
+        // Verify that the bank was actually selected
+        let verify = self.read_reg_raw(bank0::REG_BANK_SEL)?;
+        if (verify & 0x30) != val {
+            // Verification failed - The chip is not in the correct bank
+            return Err(Icm20948Error::InterfaceError);
+        }
 
         Ok(())
     }
 
     /// Write to DMP memory
     pub fn write_mems(&mut self, mem_addr: u16, data: &[u8]) -> Result<(), Icm20948Error> {
-
         // Salvamos el estado de power
         let power_state = self.base_state.wake_state;
 
@@ -468,16 +544,15 @@ where
         if (power_state & CHIP_AWAKE) == 0 {
             self.set_chip_power_state(CHIP_AWAKE, 1)?;
         }
-        
+
         // Desactivar CHIP_LP_ENABLE si es necesario
         if (power_state & CHIP_LP_ENABLE) != 0 {
             self.set_chip_power_state(CHIP_LP_ENABLE, 0)?;
         }
 
-        
         let mut bytes_written = 0;
         let size = data.len();
-        
+
         while bytes_written < size {
             // Set the starting read or write address
             let bank_selected = ((mem_addr + bytes_written as u16) >> 8) as u8;
@@ -492,13 +567,19 @@ where
 
             // Write data
             let buffer = &data[bytes_written..bytes_written + this_len];
-            self.write_regs::<bank0::Bank>(bank0::MEM_R_W, &buffer[..])?;
+            if let Err(e) = self.write_regs::<bank0::Bank>(bank0::MEM_R_W, &buffer[..]) {
+                // Restaurar el estado de LP_ENABLE si es necesario antes de retornar error
+                if (power_state & CHIP_LP_ENABLE) != 0 {
+                    let _ = self.set_chip_power_state(CHIP_LP_ENABLE, 1);
+                }
+                return Err(e);
+            }
 
             bytes_written += this_len;
         }
 
         // Restaurar el estado de LP_ENABLE si es necesario
-        if (self.base_state.wake_state & CHIP_LP_ENABLE) == 0 {
+        if (power_state & CHIP_LP_ENABLE) != 0 {
             self.set_chip_power_state(CHIP_LP_ENABLE, 1)?;
         }
 
@@ -514,7 +595,7 @@ where
         if (power_state & CHIP_AWAKE) == 0 {
             self.set_chip_power_state(CHIP_AWAKE, 1)?;
         }
-        
+
         // Desactivar CHIP_LP_ENABLE si es necesario
         if (power_state & CHIP_LP_ENABLE) != 0 {
             self.set_chip_power_state(CHIP_LP_ENABLE, 0)?;
@@ -522,7 +603,7 @@ where
 
         let mut bytes_read = 0;
         let size = data.len();
-        
+
         while bytes_read < size {
             // Set the starting read or write address
             let bank_selected = ((mem_addr + bytes_read as u16) >> 8) as u8;
@@ -536,13 +617,22 @@ where
             let this_len = std::cmp::min(types::INV_MAX_SERIAL_WRITE, size - bytes_read);
 
             // Read data
-            self.read_regs::<bank0::Bank>(bank0::MEM_R_W, &mut data[bytes_read..bytes_read + this_len])?;
+            if let Err(e) = self.read_regs::<bank0::Bank>(
+                bank0::MEM_R_W,
+                &mut data[bytes_read..bytes_read + this_len],
+            ) {
+                // Restaurar el estado de LP_ENABLE si es necesario antes de retornar error
+                if (power_state & CHIP_LP_ENABLE) != 0 {
+                    let _ = self.set_chip_power_state(CHIP_LP_ENABLE, 1);
+                }
+                return Err(e);
+            }
 
             bytes_read += this_len;
         }
 
         // Restaurar el estado de LP_ENABLE si es necesario
-        if (self.base_state.wake_state & CHIP_LP_ENABLE) == 0 {
+        if (power_state & CHIP_LP_ENABLE) != 0 {
             self.set_chip_power_state(CHIP_LP_ENABLE, 1)?;
         }
 
@@ -571,21 +661,26 @@ where
             CHIP_AWAKE => {
                 if (self.base_state.wake_state & CHIP_AWAKE) == 0 {
                     self.base_state.pwr_mgmt_1 &= !bits::SLEEP;
-                    let result = self.write_reg::<bank0::Bank>(bank0::PWR_MGMT_1,
-                        self.base_state.pwr_mgmt_1);
+                    let result = self
+                        .write_reg::<bank0::Bank>(bank0::PWR_MGMT_1, self.base_state.pwr_mgmt_1);
                     self.base_state.wake_state |= CHIP_AWAKE;
                     // After writing the bit wait 100 Micro Seconds
+                    self.delay.delay_us(100); // Increased to 1ms for stability
                     return result;
                 }
-            },
+            }
             CHIP_LP_ENABLE => {
                 if self.base_state.lp_en_support == 1 {
                     if on_off != 0 {
                         // lp_en ON
-                        if self.base_state.lp_en_support != 0 && (self.base_state.wake_state & CHIP_LP_ENABLE) == 0 {
+                        if self.base_state.lp_en_support != 0
+                            && (self.base_state.wake_state & CHIP_LP_ENABLE) == 0
+                        {
                             self.base_state.pwr_mgmt_1 |= bits::LP_EN;
-                            let result = self.write_reg::<bank0::Bank>(bank0::PWR_MGMT_1,
-                                self.base_state.pwr_mgmt_1);
+                            let result = self.write_reg::<bank0::Bank>(
+                                bank0::PWR_MGMT_1,
+                                self.base_state.pwr_mgmt_1,
+                            );
                             self.base_state.wake_state |= CHIP_LP_ENABLE;
                             return result;
                         }
@@ -593,15 +688,18 @@ where
                         // lp_en off
                         if (self.base_state.wake_state & CHIP_LP_ENABLE) != 0 {
                             self.base_state.pwr_mgmt_1 &= !bits::LP_EN;
-                            let result = self.write_reg::<bank0::Bank>(bank0::PWR_MGMT_1,
-                                self.base_state.pwr_mgmt_1);
+                            let result = self.write_reg::<bank0::Bank>(
+                                bank0::PWR_MGMT_1,
+                                self.base_state.pwr_mgmt_1,
+                            );
                             self.base_state.wake_state &= !CHIP_LP_ENABLE;
                             // After writing the bit wait 100 Micro Seconds
+                            self.delay.delay_us(100);
                             return result;
                         }
                     }
                 }
-            },
+            }
             _ => {} // No action for unknown function
         }
         Ok(())
@@ -618,8 +716,8 @@ where
 
         if self.base_state.lp_en_support == SERIAL_INTERFACE_SPI {
             self.base_state.pwr_mgmt_1 |= bits::I2C_IF_DIS;
-            result = result.and(self.write_reg::<bank0::Bank>(bank0::USER_CTRL,
-                self.base_state.pwr_mgmt_1));
+            result = result
+                .and(self.write_reg::<bank0::Bank>(bank0::USER_CTRL, self.base_state.pwr_mgmt_1));
         }
 
         // FIXME, should set up according to sensor/engines enabled
@@ -628,7 +726,8 @@ where
 
         if self.base_state.firmware_loaded {
             self.base_state.pwr_mgmt_1 |= bits::DMP_EN | bits::FIFO_EN;
-            result = result.and(self.write_reg::<bank0::Bank>(bank0::USER_CTRL, self.base_state.pwr_mgmt_1));
+            result = result
+                .and(self.write_reg::<bank0::Bank>(bank0::USER_CTRL, self.base_state.pwr_mgmt_1));
         }
 
         result = result.and(self.set_chip_power_state(CHIP_LP_ENABLE, 1));
@@ -639,9 +738,9 @@ where
     /// Enable or disable the Sleep mode
     pub fn set_sleep(&mut self, sleep: bool) -> Result<(), Icm20948Error> {
         if sleep {
-            self.modify_reg::<bank0::Bank,_>(bank0::PWR_MGMT_1, |x|x | bits::SLEEP)?;
+            self.modify_reg::<bank0::Bank, _>(bank0::PWR_MGMT_1, |x| x | bits::SLEEP)?;
         } else {
-            self.modify_reg::<bank0::Bank,_>(bank0::PWR_MGMT_1, |x|x & !bits::SLEEP)?;
+            self.modify_reg::<bank0::Bank, _>(bank0::PWR_MGMT_1, |x| x & !bits::SLEEP)?;
         }
         Ok(())
     }
@@ -661,14 +760,18 @@ where
         let dmp_cfg = [(dmp_address >> 8) as u8, (dmp_address & 0xff) as u8];
         self.write_mems_regs::<bank2::Bank>(bank2::PRGM_START_ADDRH, &dmp_cfg)
             .map_err(|_| Icm20948Error::InterfaceError)?;
-    
-        Ok(())    
+
+        Ok(())
     }
 
     /// Setup secondary I2C bus
     pub fn set_secondary(&mut self) -> Result<(), Icm20948Error> {
-        let mut result = self.write_mems_reg::<bank3::Bank>(bank3::I2C_MST_CTRL, bits::I2C_MST_P_NSR);
-        result = result.and(self.write_mems_reg::<bank3::Bank>(bank3::I2C_MST_ODR_CONFIG, data_defs::MIN_MST_ODR_CONFIG));
+        let mut result =
+            self.write_mems_reg::<bank3::Bank>(bank3::I2C_MST_CTRL, bits::I2C_MST_P_NSR);
+        result = result.and(self.write_mems_reg::<bank3::Bank>(
+            bank3::I2C_MST_ODR_CONFIG,
+            data_defs::MIN_MST_ODR_CONFIG,
+        ));
 
         result
     }
@@ -700,12 +803,25 @@ where
     }
 
     /// Setup for low power or high performance mode
-    pub fn set_lowpower_or_highperformance(&mut self, lowpower_en: u8) -> Result<(), Icm20948Error> {
+    pub fn set_lowpower_or_highperformance(
+        &mut self,
+        lowpower_en: u8,
+    ) -> Result<(), Icm20948Error> {
         if lowpower_en != 0 {
             self.enter_duty_cycle_mode()
         } else {
             self.enter_low_noise_mode()
         }
+    }
+
+    /// Force low-noise mode by clearing accel/gyro cycle bits and ensuring LP_EN is off.
+    pub fn force_low_noise(&mut self) -> Result<(), Icm20948Error> {
+        self.modify_mems_reg::<bank0::Bank, _>(bank0::PWR_MGMT_1, |x| x & !bits::LP_EN)?;
+        let mut lp_cfg = self.read_mems_reg::<bank0::Bank>(bank0::LP_CONFIG)?;
+        lp_cfg &= !(bits::ACCEL_CYCLE | bits::GYRO_CYCLE);
+        lp_cfg |= bits::I2C_MST_CYCLE;
+        self.write_mems_reg::<bank0::Bank>(bank0::LP_CONFIG, lp_cfg)?;
+        Ok(())
     }
 
     /// Enable or disable hardware sensors
@@ -714,8 +830,10 @@ where
     pub fn enable_hw_sensors(&mut self, bit_mask: u8) -> Result<(), Icm20948Error> {
         let mut result = Ok(());
 
-        if (self.base_state.pwr_mgmt_2 == (bits::PWR_ACCEL_STBY | bits::PWR_GYRO_STBY | bits::PWR_PRESSURE_STBY))
-            || (bit_mask & 0x80) != 0 {
+        if (self.base_state.pwr_mgmt_2
+            == (bits::PWR_ACCEL_STBY | bits::PWR_GYRO_STBY | bits::PWR_PRESSURE_STBY))
+            || (bit_mask & 0x80) != 0
+        {
             // All sensors off or override is on
             self.base_state.pwr_mgmt_2 = 0; // Zero means all sensors are on
 
@@ -734,7 +852,8 @@ where
                 self.base_state.pwr_mgmt_2 |= bits::PWR_PRESSURE_STBY;
             }
 
-            result = self.write_mems_reg::<bank0::Bank>(bank0::PWR_MGMT_2, self.base_state.pwr_mgmt_2);
+            result =
+                self.write_mems_reg::<bank0::Bank>(bank0::PWR_MGMT_2, self.base_state.pwr_mgmt_2);
         }
 
         // Configure compass - depends on additional functions
@@ -809,8 +928,7 @@ where
 
     /// Set gyro full-scale range
     pub fn set_gyro_fullscale(&mut self, fsr: GyroFullScale) -> Result<(), Icm20948Error> {
-        let mut gyro_config_1 = 
-            self.read_mems_reg::<bank2::Bank>(bank2::GYRO_CONFIG_1)?;
+        let mut gyro_config_1 = self.read_mems_reg::<bank2::Bank>(bank2::GYRO_CONFIG_1)?;
 
         gyro_config_1 &= !0x06;
         gyro_config_1 |= match fsr {
@@ -839,13 +957,21 @@ where
         self.base_state.accel_fullscale = fsr;
         self.write_mems_reg::<bank2::Bank>(bank2::ACCEL_CONFIG_1, accel_config)?;
 
+        // Verify write
+        let verify = self.read_mems_reg::<bank2::Bank>(bank2::ACCEL_CONFIG_1)?;
+        if (verify & 0x06) != (accel_config & 0x06) {
+            // We can't easily println here, but we can fail
+            // Returning InvalidParameter as a proxy for "Verification Failed"
+            return Err(Icm20948Error::InvalidParameter);
+        }
+
         Ok(())
     }
 
     /// Check if gyro is enabled based on sensors masks
     pub fn is_gyro_enabled(&self) -> bool {
-        (self.base_state.wake_state as u32 & INV_NEEDS_GYRO_MASK != 0) ||
-        (self.base_state.wake_state as u32 & INV_NEEDS_GYRO_MASK1 != 0)
+        (self.base_state.wake_state as u32 & INV_NEEDS_GYRO_MASK != 0)
+            || (self.base_state.wake_state as u32 & INV_NEEDS_GYRO_MASK1 != 0)
     }
 
     /// Read accelerometer data from hardware registers
@@ -889,6 +1015,56 @@ where
         Ok(temp_raw)
     }
 
+    /// Read accelerometer hardware offsets (bank1).
+    pub fn get_accel_hw_offsets(&mut self) -> Result<[i16; 3], Icm20948Error> {
+        let xh = self.read_reg::<bank1::Bank>(bank1::XA_OFFS_H)?;
+        let xl = self.read_reg::<bank1::Bank>(bank1::XA_OFFS_L)?;
+        let yh = self.read_reg::<bank1::Bank>(bank1::YA_OFFS_H)?;
+        let yl = self.read_reg::<bank1::Bank>(bank1::YA_OFFS_L)?;
+        let zh = self.read_reg::<bank1::Bank>(bank1::ZA_OFFS_H)?;
+        let zl = self.read_reg::<bank1::Bank>(bank1::ZA_OFFS_L)?;
+        let x = ((xh as i16) << 8) | (xl as i16);
+        let y = ((yh as i16) << 8) | (yl as i16);
+        let z = ((zh as i16) << 8) | (zl as i16);
+        Ok([x, y, z])
+    }
+
+    /// Write accelerometer hardware offsets (bank1).
+    pub fn set_accel_hw_offsets(&mut self, offsets: [i16; 3]) -> Result<(), Icm20948Error> {
+        self.write_reg::<bank1::Bank>(bank1::XA_OFFS_H, ((offsets[0] >> 8) & 0xFF) as u8)?;
+        self.write_reg::<bank1::Bank>(bank1::XA_OFFS_L, (offsets[0] & 0xFF) as u8)?;
+        self.write_reg::<bank1::Bank>(bank1::YA_OFFS_H, ((offsets[1] >> 8) & 0xFF) as u8)?;
+        self.write_reg::<bank1::Bank>(bank1::YA_OFFS_L, (offsets[1] & 0xFF) as u8)?;
+        self.write_reg::<bank1::Bank>(bank1::ZA_OFFS_H, ((offsets[2] >> 8) & 0xFF) as u8)?;
+        self.write_reg::<bank1::Bank>(bank1::ZA_OFFS_L, (offsets[2] & 0xFF) as u8)?;
+        Ok(())
+    }
+
+    /// Read gyroscope hardware offsets (bank2).
+    pub fn get_gyro_hw_offsets(&mut self) -> Result<[i16; 3], Icm20948Error> {
+        let xh = self.read_reg::<bank2::Bank>(bank2::XG_OFFS_USRH)?;
+        let xl = self.read_reg::<bank2::Bank>(bank2::XG_OFFS_USRL)?;
+        let yh = self.read_reg::<bank2::Bank>(bank2::YG_OFFS_USRH)?;
+        let yl = self.read_reg::<bank2::Bank>(bank2::YG_OFFS_USRL)?;
+        let zh = self.read_reg::<bank2::Bank>(bank2::ZG_OFFS_USRH)?;
+        let zl = self.read_reg::<bank2::Bank>(bank2::ZG_OFFS_USRL)?;
+        let x = ((xh as i16) << 8) | (xl as i16);
+        let y = ((yh as i16) << 8) | (yl as i16);
+        let z = ((zh as i16) << 8) | (zl as i16);
+        Ok([x, y, z])
+    }
+
+    /// Write gyroscope hardware offsets (bank2).
+    pub fn set_gyro_hw_offsets(&mut self, offsets: [i16; 3]) -> Result<(), Icm20948Error> {
+        self.write_reg::<bank2::Bank>(bank2::XG_OFFS_USRH, ((offsets[0] >> 8) & 0xFF) as u8)?;
+        self.write_reg::<bank2::Bank>(bank2::XG_OFFS_USRL, (offsets[0] & 0xFF) as u8)?;
+        self.write_reg::<bank2::Bank>(bank2::YG_OFFS_USRH, ((offsets[1] >> 8) & 0xFF) as u8)?;
+        self.write_reg::<bank2::Bank>(bank2::YG_OFFS_USRL, (offsets[1] & 0xFF) as u8)?;
+        self.write_reg::<bank2::Bank>(bank2::ZG_OFFS_USRH, ((offsets[2] >> 8) & 0xFF) as u8)?;
+        self.write_reg::<bank2::Bank>(bank2::ZG_OFFS_USRL, (offsets[2] & 0xFF) as u8)?;
+        Ok(())
+    }
+
     pub fn set_clock_source(&mut self, source: u8) -> Result<(), Icm20948Error> {
         let mut pwr_mgmt_1 = self.read_mems_reg::<bank0::Bank>(bank0::PWR_MGMT_1)?;
         pwr_mgmt_1 &= !0x07; // Clear clock source bits
@@ -918,7 +1094,12 @@ where
         self.set_clock_source(bits::CLK_PLL)?; // Set clock source to PLL with X axis gyroscope reference
 
         // Configure INT pin
-        self.write_regs::<bank0::Bank>(bank0::INT_PIN_CFG, &[0x30]) // INT active low, push-pull, no latch
+        // 0xF0:
+        // Bit 7 (1): Active Low
+        // Bit 6 (1): Open Drain
+        // Bit 5 (1): Latch until clear
+        // Bit 4 (1): Clear on any read
+        self.write_regs::<bank0::Bank>(bank0::INT_PIN_CFG, &[0xF0])
             .map_err(|_| Icm20948Error::InterfaceError)?;
 
         // Enable interrupts
@@ -945,8 +1126,7 @@ where
 
         // Configure accel and gyro scales
         self.set_accel_fullscale(AccelFullScale::Fs2G)?; // ±2g
-        self.set_gyro_fullscale(GyroFullScale::Fs2000Dps)?;  // ±2000dps
-
+        self.set_gyro_fullscale(GyroFullScale::Fs2000Dps)?; // ±2000dps
 
         // Activar accel y giroscopio
         self.enable_hw_sensors(0x83)?; // Enable accel and gyro
@@ -958,7 +1138,7 @@ where
         let mut data: u8;
         data = self.read_mems_reg::<bank0::Bank>(bank0::HW_FIX_DISABLE)?;
         data |= 0x08;
-        self.write_mems_reg::<bank0::Bank>(bank0::HW_FIX_DISABLE,data)?;
+        self.write_mems_reg::<bank0::Bank>(bank0::HW_FIX_DISABLE, data)?;
 
         self.base_state.firmware_loaded = false;
 
@@ -993,14 +1173,16 @@ where
     pub fn wakeup(&mut self) -> Result<(), Icm20948Error> {
         let mut reg = self.read_mems_reg::<bank0::Bank>(bank0::INT_PIN_CFG)?;
 
-        if (reg & (bits::INT1_ACTL | bits::INT_ANYRD_2CLEAR)) != (bits::INT1_ACTL | bits::INT_ANYRD_2CLEAR) {
+        if (reg & (bits::INT1_ACTL | bits::INT_ANYRD_2CLEAR))
+            != (bits::INT1_ACTL | bits::INT_ANYRD_2CLEAR)
+        {
             reg |= bits::INT1_ACTL | bits::INT_ANYRD_2CLEAR;
         } else {
             reg &= !(bits::INT1_ACTL | bits::INT_ANYRD_2CLEAR);
         }
 
         self.write_mems_reg::<bank0::Bank>(bank0::INT_PIN_CFG, reg)?;
-    
+
         reg = self.read_mems_reg::<bank0::Bank>(bank0::PWR_MGMT_1)?;
 
         if (reg & bits::INT_BYPASS_EN) != bits::INT_BYPASS_EN {
@@ -1103,6 +1285,8 @@ where
             self.modify_reg::<bank0::Bank, _>(bank0::PWR_MGMT_1, |x| x | bits::LP_EN)?;
         } else {
             self.modify_reg::<bank0::Bank, _>(bank0::PWR_MGMT_1, |x| x & !bits::LP_EN)?;
+            // Also ensure cycling is disabled in LP_CONFIG (Bit 6: I2C_MST_CYCLE, Bit 5: ACCEL_CYCLE, Bit 4: GYRO_CYCLE)
+            self.modify_reg::<bank0::Bank, _>(bank0::LP_CONFIG, |x| x & !0x70)?;
         }
         Ok(())
     }
@@ -1122,9 +1306,7 @@ where
 
     /// Habilitar interrupciones
     pub fn enable_interrupt(&mut self, enable: bool) -> Result<(), Icm20948Error> {
-        self.write_mems_reg::<bank0::Bank>(bank0::INT_ENABLE_1, 
-            if enable { 0x01 } else { 0x00 }
-        )?;
+        self.write_mems_reg::<bank0::Bank>(bank0::INT_ENABLE_1, if enable { 0x01 } else { 0x00 })?;
         Ok(())
     }
 
@@ -1134,41 +1316,44 @@ where
         // 1. Desactivar el I2C Master si está activado
         // 2. Establecer el bit de bypass
         // 3. Para desactivar, limpiamos el bit de bypass
-        
+
         // Asegurarnos que estamos en el banco 0 para acceder a estos registros
         self.set_bank(0)?;
-        
+
         if enable {
             // Leer el registro USER_CTRL
             let user_ctrl = self.read_mems_reg::<bank0::Bank>(bank0::USER_CTRL)?;
-            
+
             // Desactivar I2C Master si está activado
             if (user_ctrl & bits::I2C_MST_EN) != 0 {
-                self.write_mems_reg::<bank0::Bank>(bank0::USER_CTRL, user_ctrl & !bits::I2C_MST_EN)?;
+                self.write_mems_reg::<bank0::Bank>(
+                    bank0::USER_CTRL,
+                    user_ctrl & !bits::I2C_MST_EN,
+                )?;
                 // Esperar a que el cambio surta efecto
                 self.delay.delay_ms(10);
             }
         }
-        
+
         // Leer el registro INT_PIN_CFG
         let mut reg = self.read_mems_reg::<bank0::Bank>(bank0::INT_PIN_CFG)?;
-        
+
         if enable {
             reg |= bits::INT_BYPASS_EN;
         } else {
             reg &= !bits::INT_BYPASS_EN;
-            
+
             // Si desactivamos bypass, podemos necesitar reactivar el I2C Master
             let user_ctrl = self.read_mems_reg::<bank0::Bank>(bank0::USER_CTRL)?;
             self.write_mems_reg::<bank0::Bank>(bank0::USER_CTRL, user_ctrl | bits::I2C_MST_EN)?;
         }
-        
+
         // Escribir el registro INT_PIN_CFG
         self.write_mems_reg::<bank0::Bank>(bank0::INT_PIN_CFG, reg)?;
-        
+
         // Esperar a que los cambios surtan efecto
         self.delay.delay_ms(5);
-        
+
         Ok(())
     }
 
@@ -1216,7 +1401,10 @@ where
     /// Lee los datos raw del acelerómetro y los devuelve como valores en G
     pub fn read_accelerometer(&mut self) -> Result<[f32; 3], Icm20948Error> {
         let raw_data = self.accel_read_hw_reg_data()?;
-        eprintln!("Raw accel data: {:?}, Full scale: {:?}", raw_data, self.base_state.accel_fullscale);
+        eprintln!(
+            "Raw accel data: {:?}, Full scale: {:?}",
+            raw_data, self.base_state.accel_fullscale
+        );
         Ok(accel_raw_to_g(raw_data, self.base_state.accel_fullscale))
     }
 

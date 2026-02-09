@@ -276,7 +276,7 @@ where
             return Err(Icm20948Error::WhoAmIError);
         }
 
-        println!("Compás conectado: {:?} ({:?})", compass_type, retries);
+        // println!("Compás conectado: {:?} ({:?})", compass_type, retries);
 
         // Crear una configuración de compás
         let mut compass_config = CompassConfig {
@@ -378,8 +378,8 @@ where
             return Err(Icm20948Error::InvalidParameter);
         }
 
-        if self.base_state.compass_config.as_mut().unwrap().mode != compass_rd::MODE_SINGLE {
-            // Establecer modo de medida única
+        if self.base_state.compass_config.as_ref().unwrap().mode == compass_rd::MODE_SINGLE {
+            // Trigger a single measurement each time
             let mode_reg = match self
                 .base_state
                 .compass_config
@@ -575,6 +575,120 @@ where
         }
 
         Ok(mag_data)
+    }
+
+    /// Leer datos raw del compás (sin aplicar calibración ni escala).
+    pub fn read_compass_raw(&mut self, timeout_ms: u32) -> Result<[i16; 3], Icm20948Error> {
+        if self.base_state.compass_config.is_none()
+            || self
+                .base_state
+                .compass_config
+                .as_ref()
+                .unwrap()
+                .compass_state
+                != CompassState::Setup
+        {
+            return Err(Icm20948Error::InvalidParameter);
+        }
+
+        if self.base_state.compass_config.as_ref().unwrap().mode == compass_rd::MODE_SINGLE {
+            // Trigger a single measurement each time
+            let mode_reg = match self
+                .base_state
+                .compass_config
+                .as_ref()
+                .unwrap()
+                .compass_type
+            {
+                CompassType::AK09916 => ak_reg::AK09916_CNTL2,
+                CompassType::AK09911 => ak_reg::AK09911_CNTL2,
+                CompassType::AK09912 => ak_reg::AK09912_CNTL2,
+                _ => compass_rd::MODE_SINGLE,
+            };
+
+            self.write_secondary_i2c(
+                SecondaryI2cChannel::Slave3,
+                self.base_state
+                    .compass_config
+                    .as_ref()
+                    .unwrap()
+                    .compass_i2c_addr,
+                mode_reg,
+                ak_val::SINGLE_MEASURE,
+            )?;
+        }
+
+        // Esperar DRDY
+        let mut count = 0;
+        while count < timeout_ms {
+            let status_reg = match self
+                .base_state
+                .compass_config
+                .as_ref()
+                .unwrap()
+                .compass_type
+            {
+                CompassType::AK09916 => ak_reg::AK09916_STATUS1,
+                CompassType::AK09911 => ak_reg::AK09911_STATUS1,
+                CompassType::AK09912 => ak_reg::AK09912_STATUS1,
+                _ => ak_reg::STATUS,
+            };
+
+            let mut status_data = [0u8; 1];
+            self.read_secondary_i2c(
+                SecondaryI2cChannel::Slave3,
+                self.base_state
+                    .compass_config
+                    .as_ref()
+                    .unwrap()
+                    .compass_i2c_addr,
+                status_reg,
+                &mut status_data,
+            )?;
+
+            if (status_data[0] & ak_val::DRDY) == 0 {
+                count += 1;
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                continue;
+            }
+            break;
+        }
+
+        if count == timeout_ms {
+            return Err(Icm20948Error::Timeout);
+        }
+
+        let data_reg = match self
+            .base_state
+            .compass_config
+            .as_ref()
+            .unwrap()
+            .compass_type
+        {
+            CompassType::AK09916 => ak_reg::AK09916_MEASURE_DATA,
+            CompassType::AK09911 => ak_reg::AK09911_MEASURE_DATA,
+            CompassType::AK09912 => ak_reg::AK09912_MEASURE_DATA,
+            _ => ak_reg::MEASURE_DATA,
+        };
+
+        let mut raw_data = [0u8; 6];
+        self.read_secondary_i2c(
+            SecondaryI2cChannel::Slave3,
+            self.base_state
+                .compass_config
+                .as_ref()
+                .unwrap()
+                .compass_i2c_addr,
+            data_reg,
+            &mut raw_data,
+        )?;
+
+        let mut mag_values = [0i16; 3];
+        for i in 0..3 {
+            mag_values[i] = (raw_data[i * 2] as i16) | ((raw_data[i * 2 + 1] as i16) << 8);
+        }
+
+        Ok(mag_values)
     }
 
     /// Verifica si el compás está conectado
@@ -979,122 +1093,90 @@ where
     /// Lee datos desde el bus I2C secundario
     fn read_secondary_i2c(
         &mut self,
-        channel: SecondaryI2cChannel,
+        _channel: SecondaryI2cChannel,
         addr: u8,
         reg: u8,
         data: &mut [u8],
     ) -> Result<(), Icm20948Error> {
-        // Determinar los registros según el canal
-        let (addr_reg, reg_reg, ctrl_reg, _) = match channel {
-            SecondaryI2cChannel::Slave0 => (
-                slave_reg::I2C_SLV0_ADDR,
-                slave_reg::I2C_SLV0_REG,
-                slave_reg::I2C_SLV0_CTRL,
-                slave_reg::I2C_SLV0_DO,
-            ),
-            SecondaryI2cChannel::Slave1 => (
-                slave_reg::I2C_SLV1_ADDR,
-                slave_reg::I2C_SLV1_REG,
-                slave_reg::I2C_SLV1_CTRL,
-                slave_reg::I2C_SLV1_DO,
-            ),
-            SecondaryI2cChannel::Slave2 => (
-                slave_reg::I2C_SLV2_ADDR,
-                slave_reg::I2C_SLV2_REG,
-                slave_reg::I2C_SLV2_CTRL,
-                slave_reg::I2C_SLV2_DO,
-            ),
-            SecondaryI2cChannel::Slave3 => (
-                slave_reg::I2C_SLV3_ADDR,
-                slave_reg::I2C_SLV3_REG,
-                slave_reg::I2C_SLV3_CTRL,
-                slave_reg::I2C_SLV3_DO,
-            ),
-            SecondaryI2cChannel::Slave4 => (
-                slave_reg::I2C_SLV4_ADDR,
-                slave_reg::I2C_SLV4_REG,
-                slave_reg::I2C_SLV4_CTRL,
-                slave_reg::I2C_SLV4_DO,
-            ),
-        };
+        const I2C_MST_STATUS_SLV4_DONE: u8 = 0x40;
 
-        // Cambiar al banco 3
-        self.set_bank(3)?;
+        // Use SLV4 for synchronous single-byte reads to avoid EXT_SENS_DATA offsets.
+        for (i, byte) in data.iter_mut().enumerate() {
+            self.set_bank(3)?;
+            self.write_regs_raw(slave_reg::I2C_SLV4_ADDR, &[addr | slv_bits::I2C_READ])?;
+            self.write_regs_raw(slave_reg::I2C_SLV4_REG, &[reg.wrapping_add(i as u8)])?;
+            self.write_regs_raw(slave_reg::I2C_SLV4_CTRL, &[slv_bits::I2C_ENABLE])?;
 
-        // Configurar esclavo para leer
-        self.write_regs_raw(addr_reg, &[addr | slv_bits::I2C_READ])?;
-        self.write_regs_raw(reg_reg, &[reg])?;
+            // Wait for transfer completion.
+            self.set_bank(0)?;
+            let mut tries = 0u8;
+            let mut done = false;
+            loop {
+                let mut status = [0u8; 1];
+                self.read_regs_raw(bank0::I2C_MST_STATUS, &mut status)?;
+                if (status[0] & I2C_MST_STATUS_SLV4_DONE) != 0 {
+                    done = true;
+                    break;
+                }
+                if tries >= 10 {
+                    break;
+                }
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            if !done {
+                // Best-effort fallback: some platforms do not report SLV4_DONE reliably.
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
 
-        // Calcular bits de control
-        let len = data.len().min(15) as u8; // Máximo 15 bytes por transacción
-        let ctrl_val = slv_bits::I2C_ENABLE | len;
+            // Read the result byte.
+            self.set_bank(3)?;
+            let mut tmp = [0u8; 1];
+            self.read_regs_raw(slave_reg::I2C_SLV4_DI, &mut tmp)?;
+            *byte = tmp[0];
+        }
 
-        self.write_regs_raw(ctrl_reg, &[ctrl_val])?; // Update to use slice for ctrl_val
-
-        // Cambiar al banco 0
         self.set_bank(0)?;
-
-        // Esperar a que la transacción complete
-        self.read_regs_raw(slave_reg::EXT_SENS_DATA_00, data)?;
-
         Ok(())
     }
 
     /// Escribe datos al bus I2C secundario
     fn write_secondary_i2c(
         &mut self,
-        channel: SecondaryI2cChannel,
+        _channel: SecondaryI2cChannel,
         addr: u8,
         reg: u8,
         data: u8,
     ) -> Result<(), Icm20948Error> {
-        // Determinar los registros según el canal
-        let (addr_reg, reg_reg, ctrl_reg, do_reg) = match channel {
-            SecondaryI2cChannel::Slave0 => (
-                slave_reg::I2C_SLV0_ADDR,
-                slave_reg::I2C_SLV0_REG,
-                slave_reg::I2C_SLV0_CTRL,
-                slave_reg::I2C_SLV0_DO,
-            ),
-            SecondaryI2cChannel::Slave1 => (
-                slave_reg::I2C_SLV1_ADDR,
-                slave_reg::I2C_SLV1_REG,
-                slave_reg::I2C_SLV1_CTRL,
-                slave_reg::I2C_SLV1_DO,
-            ),
-            SecondaryI2cChannel::Slave2 => (
-                slave_reg::I2C_SLV2_ADDR,
-                slave_reg::I2C_SLV2_REG,
-                slave_reg::I2C_SLV2_CTRL,
-                slave_reg::I2C_SLV2_DO,
-            ),
-            SecondaryI2cChannel::Slave3 => (
-                slave_reg::I2C_SLV3_ADDR,
-                slave_reg::I2C_SLV3_REG,
-                slave_reg::I2C_SLV3_CTRL,
-                slave_reg::I2C_SLV3_DO,
-            ),
-            SecondaryI2cChannel::Slave4 => (
-                slave_reg::I2C_SLV4_ADDR,
-                slave_reg::I2C_SLV4_REG,
-                slave_reg::I2C_SLV4_CTRL,
-                slave_reg::I2C_SLV4_DO,
-            ),
-        };
+        const I2C_MST_STATUS_SLV4_DONE: u8 = 0x40;
 
-        // Cambiar al banco 3
+        // Use SLV4 for synchronous single-byte writes.
         self.set_bank(3)?;
+        self.write_regs_raw(slave_reg::I2C_SLV4_ADDR, &[addr & !slv_bits::I2C_READ])?;
+        self.write_regs_raw(slave_reg::I2C_SLV4_REG, &[reg])?;
+        self.write_regs_raw(slave_reg::I2C_SLV4_DO, &[data])?;
+        self.write_regs_raw(slave_reg::I2C_SLV4_CTRL, &[slv_bits::I2C_ENABLE])?;
 
-        // Configurar esclavo para escribir
-        self.write_regs_raw(addr_reg, &[addr & !slv_bits::I2C_READ])?;
-        self.write_regs_raw(reg_reg, &[reg])?;
-        self.write_regs_raw(do_reg, &[data])?;
-
-        // Habilitar escritura (1 byte)
-        self.write_regs_raw(ctrl_reg, &[slv_bits::I2C_ENABLE | 1])?;
-
-        // Cambiar al banco 0
+        // Wait for transfer completion.
         self.set_bank(0)?;
+        let mut tries = 0u8;
+        let mut done = false;
+        loop {
+            let mut status = [0u8; 1];
+            self.read_regs_raw(bank0::I2C_MST_STATUS, &mut status)?;
+            if (status[0] & I2C_MST_STATUS_SLV4_DONE) != 0 {
+                done = true;
+                break;
+            }
+            if tries >= 10 {
+                break;
+            }
+            tries += 1;
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        if !done {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
 
         Ok(())
     }

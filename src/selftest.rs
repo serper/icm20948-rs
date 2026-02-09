@@ -11,6 +11,7 @@ use crate::register::registers::bank1;
 use crate::register::registers::bank2;
 use crate::types;
 use embedded_hal::delay::DelayNs;
+use log;
 
 /// Estructura para almacenar los resultados del auto-test
 #[derive(Debug, Default, Clone, Copy)]
@@ -101,6 +102,16 @@ where
     device.wakeup()?;
     device.set_low_power_mode(true)?;
 
+    // Guardar offsets HW actuales y deshabilitar compensación durante el muestreo
+    let prev_accel_offsets = device.get_accel_hw_offsets()?;
+    let _prev_gyro_offsets = device.get_gyro_hw_offsets()?;
+    if must_apply {
+        device.set_accel_hw_offsets([0, 0, 0])?;
+        device.set_gyro_hw_offsets([0, 0, 0])?;
+        device.modify_reg::<bank2::Bank, _>(bank2::ACCEL_CONFIG_2, |val| val & !0x01)?;
+        device.modify_reg::<bank2::Bank, _>(bank2::GYRO_CONFIG_2, |val| val & !0x01)?;
+    }
+
     // Configurar el acelerómetro y giroscopio para el auto-test
     let last_accel_fs = device.get_accel_fullscale()?;
     device.set_accel_fullscale(types::AccelFullScale::Fs2G)?;
@@ -168,8 +179,17 @@ where
 
     // Detectar qué eje está alineado con la gravedad
     let axis_magnitudes = [accel_avg[0].abs(), accel_avg[1].abs(), accel_avg[2].abs()];
+    let accel_avg_g = [
+        accel_avg[0] as f32 / gravity_value as f32,
+        accel_avg[1] as f32 / gravity_value as f32,
+        accel_avg[2] as f32 / gravity_value as f32,
+    ];
+    let abs_g = [
+        accel_avg_g[0].abs(),
+        accel_avg_g[1].abs(),
+        accel_avg_g[2].abs(),
+    ];
 
-    // Encontrar el eje con la mayor magnitud (probablemente el afectado por gravedad)
     // Encontrar el eje con la mayor magnitud (probablemente el afectado por gravedad)
     let (gravity_axis, _) = axis_magnitudes
         .iter()
@@ -180,6 +200,21 @@ where
     // Determinar dirección (positiva o negativa)
     let gravity_sign = if accel_avg[gravity_axis] > 0 { 1 } else { -1 };
 
+    // Validar que el eje dominante esté suficientemente alineado con la gravedad.
+    // Si no está alineado, evitar calibrar el acelerómetro para no introducir sesgo.
+    let mut abs_sorted = abs_g;
+    abs_sorted.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    let dominant = abs_sorted[0];
+    let secondary = abs_sorted[1];
+    let apply_accel_cal = dominant >= 0.7 && secondary <= 0.2;
+    if !apply_accel_cal {
+        log::warn!(
+            "Accel calibration skipped: gravity not aligned (dominant={:.3}g, secondary={:.3}g)",
+            dominant,
+            secondary
+        );
+    }
+
     // Para el giroscopio: compensar todos los ejes a 0
     // Para el giroscopio: compensar todos los ejes a 0
     let mut gyro_offsets = [0i16; 3];
@@ -189,6 +224,9 @@ where
     }
 
     // Para el acelerómetro: leer valores actuales y aplicar delta
+    // Convertir raw a offset regs (2048 LSB/g) de forma independiente al fullscale.
+    let gravity_lsb = gravity_value as f32;
+    let offset_scale = 2048.0 / gravity_lsb;
     let mut accel_offsets = [0i16; 3];
     let mut reg_addr = bank1::XA_OFFS_H;
 
@@ -198,12 +236,12 @@ where
         let l_byte = device.read_reg::<bank1::Bank>(reg_addr + 1)?;
         let old_offset = ((h_byte as i16) << 8) | (l_byte as i16);
 
-        // Calcular delta (convertir de 2g a 16g - >>3)
-        let mut delta_offset = accel_avg[i] >> 3;
+        // Calcular delta en LSB de offset (2048 LSB/g)
+        let mut delta_offset = (accel_avg[i] as f32 * offset_scale).round() as i16;
 
         if i == gravity_axis {
             // Aplicar compensación de gravedad
-            delta_offset -= (gravity_sign * (gravity_value >> 3)) as i16;
+            delta_offset -= (gravity_sign * 2048) as i16;
         }
         // Calcular nuevo offset (restar delta del valor actual)
         accel_offsets[i] = old_offset - delta_offset;
@@ -215,41 +253,24 @@ where
     // El ICM20948 almacena los offsets en registros específicos
     // Banco 1 contiene los registros de offset
     if must_apply {
-        // Escribir offsets del acelerómetro
-        device
-            .write_reg::<bank1::Bank>(bank1::XA_OFFS_H, ((accel_offsets[0] >> 8) & 0xFF) as u8)?;
-        device.write_reg::<bank1::Bank>(bank1::XA_OFFS_L, (accel_offsets[0] & 0xFF) as u8)?;
-        device
-            .write_reg::<bank1::Bank>(bank1::YA_OFFS_H, ((accel_offsets[1] >> 8) & 0xFF) as u8)?;
-        device.write_reg::<bank1::Bank>(bank1::YA_OFFS_L, (accel_offsets[1] & 0xFF) as u8)?;
-        device
-            .write_reg::<bank1::Bank>(bank1::ZA_OFFS_H, ((accel_offsets[2] >> 8) & 0xFF) as u8)?;
-        device.write_reg::<bank1::Bank>(bank1::ZA_OFFS_L, (accel_offsets[2] & 0xFF) as u8)?;
+        if apply_accel_cal {
+            device.set_accel_hw_offsets(accel_offsets)?;
+            device.modify_reg::<bank2::Bank, _>(bank2::ACCEL_CONFIG_2, |val| val | 0x01)?;
+        } else {
+            device.set_accel_hw_offsets(prev_accel_offsets)?;
+        }
 
-        // Escribir offsets del giroscopio
-        device
-            .write_reg::<bank2::Bank>(bank2::XG_OFFS_USRH, ((gyro_offsets[0] >> 8) & 0xFF) as u8)?;
-        device.write_reg::<bank2::Bank>(bank2::XG_OFFS_USRL, (gyro_offsets[0] & 0xFF) as u8)?;
-        device
-            .write_reg::<bank2::Bank>(bank2::YG_OFFS_USRH, ((gyro_offsets[1] >> 8) & 0xFF) as u8)?;
-        device.write_reg::<bank2::Bank>(bank2::YG_OFFS_USRL, (gyro_offsets[1] & 0xFF) as u8)?;
-        device
-            .write_reg::<bank2::Bank>(bank2::ZG_OFFS_USRH, ((gyro_offsets[2] >> 8) & 0xFF) as u8)?;
-        device.write_reg::<bank2::Bank>(bank2::ZG_OFFS_USRL, (gyro_offsets[2] & 0xFF) as u8)?;
-
-        // Aplicar offsets - habilitar la compensación
-        device.modify_reg::<bank2::Bank, _>(bank2::ACCEL_CONFIG_2, |val| val | 0x01)?; // Bit 0: enable accel offset cancellation
+        device.set_gyro_hw_offsets(gyro_offsets)?;
         device.modify_reg::<bank2::Bank, _>(bank2::GYRO_CONFIG_2, |val| val | 0x01)?;
-        // Bit 0: enable gyro offset cancellation
     }
 
     // Guardar los offsets en la estructura del dispositivo para futuras referencias
-    println!("Calibración completada");
-    println!(
+    log::info!("Calibración completada");
+    log::info!(
         "Offsets de acelerómetro: [{}, {}, {}]",
         accel_offsets[0], accel_offsets[1], accel_offsets[2]
     );
-    println!(
+    log::info!(
         "Offsets de giroscopio: [{}, {}, {}]",
         gyro_offsets[0], gyro_offsets[1], gyro_offsets[2]
     );

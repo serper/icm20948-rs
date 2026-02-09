@@ -271,21 +271,16 @@ fn main() {
                         }
                     }
                     if let Some(gyro) = dmp_state.gyro_calibr.as_ref() {
-                        println!("Gyro Calib: x: {:?}, y: {:?}, z: {:?}", gyro.x, gyro.y, gyro.z);
+                        println!("Gyro Calib (Q20): x: {:?}, y: {:?}, z: {:?}", gyro[0], gyro[1], gyro[2]);
                     }
                     if let Some(compass) = dmp_state.compass_data.as_ref() {
                         println!("Compass: x: {:?}, y: {:?}, z: {:?}", compass[0], compass[1], compass[2]);
                     }
                     if let Some(compass) = dmp_state.compass_calibr.as_ref() {
-                        println!("Compass Calibr: w: {:?}, x: {:?}, y: {:?}, z: {:?}", compass.w, compass.x, compass.y, compass.z);
-                        let euler_angles = icm20948_rs::dmp_fifo::quaternion_to_euler(compass);
-                        let mut roll = euler_angles[0] + 180.0;
-                        let pitch = -euler_angles[1];
-                        let yaw = (-euler_angles[2] + 360.0) % 360.0;
-                        if roll > 180.0 {
-                            roll -= 360.0;
-                        }
-                        println!("Compass Angles: roll: {:?}, pitch: {:?}, yaw: {:?}", roll, pitch, yaw);
+                        println!(
+                            "Compass Calibr (Q16): x: {:?}, y: {:?}, z: {:?}",
+                            compass[0], compass[1], compass[2]
+                        );
                     }
                     if let Some(quaternion) = dmp_state.quaternion9.as_ref() {
                         println!("Quaternion9: w: {:?}, x: {:?}, y: {:?}, z: {:?}", quaternion.w, quaternion.x, quaternion.y, quaternion.z);

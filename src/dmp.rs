@@ -8,15 +8,25 @@ use crate::dmp3_firmware;
 use crate::interface::Interface;
 use crate::register::dmp::{self};
 use crate::register::registers::{bank0, bank1, bank2, bank3};
+use crate::types::data_defs::{AK89XX_SHIFT, AK99XX_SHIFT};
 use crate::types::{
-    bits, AccelFullScale, AndroidSensor, GyroFullScale, OdrSensor, Sensor, DMP_LOAD_START,
-    DMP_START_ADDRESS, SENSORTOCONTROLBITS,
+    bits, scale_factor, AccelFullScale, AndroidSensor, GyroFullScale, OdrSensor, Sensor,
+    DMP_LOAD_START, DMP_START_ADDRESS, SENSORTOCONTROLBITS,
 };
 use embedded_hal::delay::DelayNs;
+
+use crate::compass::CompassType;
+use crate::dmp_fifo::DmpFifoConfig;
+use log::debug;
+
+const BAC_PED_Y_RATIO_WEARABLE: i32 = 1 << 30;
 
 /// Driver para el DMP (Digital Motion Processor) del ICM20948
 pub struct DmpDriverIcm20948<I, D> {
     pub(crate) device: Icm20948<I, D>,
+    pub(crate) expected_config: DmpFifoConfig,
+    pub(crate) output_mask1: u16,
+    pub(crate) output_mask2: u16,
 }
 
 impl<I, D, E> DmpDriverIcm20948<I, D>
@@ -26,7 +36,12 @@ where
 {
     /// Creates a new `DmpDriverIcm20948`.
     pub fn new(device: Icm20948<I, D>) -> Self {
-        Self { device }
+        Self {
+            device,
+            expected_config: DmpFifoConfig::default(),
+            output_mask1: 0,
+            output_mask2: 0,
+        }
     }
 
     /// Initializes the DMP driver.
@@ -75,9 +90,10 @@ where
         self.enable_dmp(false)?;
         self.device.set_fifo_enable(false)?;
 
-        // 5. Configurar el rango de escala del acelerómetro y giroscopio
+        // 5. Configurar el rango de escala del acelerómetro y giroscopio (Hardware Only)
         self.device.set_accel_fullscale(AccelFullScale::Fs4G)?;
         self.device.set_gyro_fullscale(GyroFullScale::Fs2000Dps)?;
+        self.device.set_gyro_divider(4)?; // Set gyro divider to 4 (1125 / (1+4) = 225Hz) to match DMP expectations
         self.device.enable_gyro_dlpf(true)?; // Habilitar DLPF para el giroscopio
 
         self.device
@@ -108,6 +124,13 @@ where
             &[(start_address >> 8) as u8, (start_address & 0xFF) as u8],
         )?; // Volver a escribir la dirección de inicio del DMP
 
+        // 7. Configurar matrices de transformación y escalas del DMP
+        self.apply_dmp_memory_config()?;
+
+        Ok(())
+    }
+
+    fn apply_dmp_memory_config(&mut self) -> Result<(), Icm20948Error> {
         self.device
             .write_mems_reg::<bank0::Bank>(bank0::HW_FIX_DISABLE, 0x48)?;
 
@@ -115,29 +138,186 @@ where
             .write_mems_reg::<bank0::Bank>(bank0::SINGLE_FIFO_PRIORITY_SEL, 0xE4)?;
 
         // 7. Configurar matrices de transformación y escalas
-        self.device
-            .write_mems(dmp::fsr::ACC, &[0x04, 0x00, 0x00, 0x00])?;
-        self.device
-            .write_mems(dmp::fsr::ACC2, &[0x00, 0x04, 0x00, 0x00])?;
+        // Use wrappers to set both Hardware and DMP memory (Redundant hardware write is safe)
+        self.set_accel_fsr(4)?; // Sets ACC and ACC2 in DMP + Hardware
+                                // self.device.write_mems(dmp::fsr::ACC, &[0x04, 0x00, 0x00, 0x00])?;
+                                // self.device.write_mems(dmp::fsr::ACC2, &[0x00, 0x04, 0x00, 0x00])?;
 
-        // Values from Invensense Nucleo firmware
-        self.set_compass_matrix(&[
-            0x09999999, 0x00000000, 0x00000000, 0x00000000, 0xF6666667, 0x00000000, 0x00000000,
-            0x00000000, 0xF6666667,
-        ])?;
+        if let Some(mtx) = self.compass_matrix_from_config() {
+            self.set_compass_matrix(&mtx)?;
+        } else {
+            // Values from Invensense Nucleo firmware (AK09916 default)
+            self.set_compass_matrix(&[
+                0x09999999, 0x00000000, 0x00000000, 0x00000000, 0xF6666667, 0x00000000, 0x00000000,
+                0x00000000, 0xF6666667,
+            ])?;
+        }
 
         self.set_b2s_matrix(&[
             0x40000000, 0x00000000, 0x00000000, 0x00000000, 0x40000000, 0x00000000, 0x00000000,
             0x00000000, 0x40000000,
         ])?;
 
-        self.dmp_set_gyro_sf(0x04, 0x03)?; // Set gyro scale factor to 4 (2000dps)
-        self.device
-            .write_mems(dmp::fsr::GYRO, &[0x10, 0x00, 0x00, 0x00])?;
+        self.dmp_set_gyro_sf(4, 3)?; // Set DMP internal gyro scale factor (div=4, level=3 for 2000dps)
+        self.set_gyro_fsr(2000)?; // Sets GYRO FSR in DMP + Hardware
+                                  // self.device.write_mems(dmp::fsr::GYRO, &[0x10, 0x00, 0x00, 0x00])?;
 
         self.set_accel_feedback_gain(0x00E8BA2E)?;
         self.set_accel_cal_params(&[0x3D27D27D, 0x02D82D83, 0x0000])?;
         self.set_compass_cal_params(0x0045, None)?;
+
+        Ok(())
+    }
+
+    fn compass_scale_q30(compass_type: CompassType, scale: u8) -> i32 {
+        match compass_type {
+            CompassType::None => 0,
+            CompassType::AK09916 => scale_factor::AK09916,
+            CompassType::AK09911 => scale_factor::AK09911,
+            CompassType::AK09912 => scale_factor::AK09912,
+            CompassType::AK08963 => {
+                if scale == 0 {
+                    scale_factor::AK8963_14BIT
+                } else {
+                    scale_factor::AK8963_16BIT
+                }
+            }
+        }
+    }
+
+    fn compass_matrix_from_config(&self) -> Option<[u32; 9]> {
+        let cfg = self.device.base_state.compass_config.as_ref()?;
+        if cfg.compass_type == CompassType::None {
+            return None;
+        }
+
+        let scale_q30 = Self::compass_scale_q30(cfg.compass_type, cfg.calibration.scale) as i64;
+        let shift = match cfg.compass_type {
+            CompassType::AK09911 => AK99XX_SHIFT,
+            _ => AK89XX_SHIFT,
+        } as i64;
+
+        let mult_q30 = |a: i64, b: i64| -> i64 { (a * b) >> 30 };
+
+        // Base compass orientation matrix per compass type
+        // These matrices transform compass axes to match ICM20948 accel/gyro frame
+        let base_matrix: [i8; 9] = match cfg.compass_type {
+            CompassType::AK09911 => [-1, 0, 0, 0, -1, 0, 0, 0, 1],
+            CompassType::AK09912 => [1, 0, 0, 0, 1, 0, 0, 0, 1],
+            CompassType::AK08963 => [1, 0, 0, 0, 1, 0, 0, 0, 1],
+            CompassType::AK09916 => [1, 0, 0, 0, 1, 0, 0, 0, 1], // Identity (User controls layout)
+            CompassType::None => [1, 0, 0, 0, 1, 0, 0, 0, 1],
+        };
+
+        // Apply user's mounting matrix to base matrix: result = user_matrix * base_matrix
+        let user_matrix = cfg.calibration.mounting_matrix;
+        let mut combined = [0i8; 9];
+        for i in 0..3 {
+            for j in 0..3 {
+                let mut acc: i32 = 0;
+                for k in 0..3 {
+                    acc += (user_matrix[i * 3 + k] as i32) * (base_matrix[k * 3 + j] as i32);
+                }
+                combined[i * 3 + j] = acc as i8;
+            }
+        }
+
+        // Sensitivity adjustment (Q30)
+        let mut sens_q30 = [0i32; 3];
+        for i in 0..3 {
+            let sens = (cfg.calibration.sensitivity[i] as i64 + 128) << shift;
+            sens_q30[i] = mult_q30(sens, scale_q30) as i32;
+        }
+
+        // Apply combined matrix with sensitivity (Q30)
+        let mut current = [0i32; 9];
+        for i in 0..9 {
+            let m = combined[i] as i64;
+            let s = sens_q30[i % 3] as i64;
+            current[i] = (m * s) as i32;
+        }
+
+        // Soft-iron matrix (Q30)
+        let soft_iron = self.device.base_state.soft_iron_matrix;
+
+        // final_matrix = soft_iron * current (Q30)
+        let mut final_m = [0i32; 9];
+        for i in 0..3 {
+            for j in 0..3 {
+                let mut acc: i64 = 0;
+                for k in 0..3 {
+                    acc += mult_q30(soft_iron[i * 3 + k] as i64, current[j + k * 3] as i64);
+                }
+                final_m[i * 3 + j] = acc as i32;
+            }
+        }
+        // Convert to u32 output
+        let mut out = [0u32; 9];
+        for i in 0..9 {
+            out[i] = final_m[i] as u32;
+        }
+        Some(out)
+    }
+
+    pub fn refresh_compass_matrix_from_config(&mut self) -> Result<(), Icm20948Error> {
+        if let Some(mtx) = self.compass_matrix_from_config() {
+            self.set_compass_matrix(&mtx)?;
+            debug!("Compass matrix updated from config: {:?}", mtx);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn reapply_dmp_memory_config(&mut self) -> Result<(), Icm20948Error> {
+        self.apply_dmp_memory_config()
+    }
+
+    /// Reinitialize DMP algorithms after mounting matrix changes.
+    /// This is required because the DMP caches the orientation configuration
+    /// at initialization time and won't apply changes without a reset.
+    pub fn reinit_dmp_algorithms(&mut self) -> Result<(), Icm20948Error> {
+        // 1. Reset the FIFO to clear any stale data with old orientation
+        self.device.reset_fifo()?;
+
+        // 2. Re-apply the B2S matrix from current mounting_matrix state
+        // 2. Re-apply the B2S matrix (Mounting * Scale)
+        // B2S_MTX = Mounting (Rotation) * Scale (Calibration)
+        let m = self.device.base_state.mounting_matrix;
+        let s = self.device.base_state.accel_gyro_scale_matrix;
+        let mut final_m = [0f32; 9];
+
+        // Multiply 3x3 matrices: final_m = m * s
+        // m is i8, s is f32
+        for i in 0..3 {
+            for j in 0..3 {
+                let mut acc: f32 = 0.0;
+                for k in 0..3 {
+                    acc += (m[i * 3 + k] as f32) * s[k * 3 + j];
+                }
+                final_m[i * 3 + j] = acc;
+            }
+        }
+
+        let q30 = |v: f32| -> u32 { (v * (1i64 << 30) as f32) as i32 as u32 };
+        let mtx = [
+            q30(final_m[0]),
+            q30(final_m[1]),
+            q30(final_m[2]),
+            q30(final_m[3]),
+            q30(final_m[4]),
+            q30(final_m[5]),
+            q30(final_m[6]),
+            q30(final_m[7]),
+            q30(final_m[8]),
+        ];
+        self.set_b2s_matrix(&mtx)?;
+
+        // 3. Refresh compass matrix if compass is configured
+        if self.device.base_state.compass_config.is_some() {
+            self.refresh_compass_matrix_from_config()?;
+        }
+
+        // 4. Reset gyro scale factor (required after matrix change per InvenSense SDK)
+        self.dmp_set_gyro_sf(0x04, 0x03)?;
 
         Ok(())
     }
@@ -322,7 +502,7 @@ where
         let mut event_control = 0u16;
 
         let android_sensor = DmpDriverIcm20948::<I, D>::sensor_type_2_android_sensor(sensor);
-        if (android_sensor as u8) >= (AndroidSensor::NumMax as u8) {
+        if (android_sensor as u8) > (AndroidSensor::GeneralSensorsMax as u8) {
             return Err(Icm20948Error::InvalidParameter);
         }
 
@@ -394,10 +574,18 @@ where
             }
         }
 
+        if (delta & dmp::output_mask::QUAT9 as u16) != 0
+            && (data_rdy_status & dmp::data_ready_status::SECONDARY_COMPASS) != 0
+        {
+            delta |= dmp::output_mask::GEOMAG as u16;
+        }
+
         self.device.set_sleep(false)?; // Desactivar el modo de suspensión
         self.device.low_power(false)?; // Desactivar el modo de bajo consumo
 
         let mut delta2 = 0u16;
+        let mut needs_bac = false;
+        let mut needs_accel_ready = false;
         if (delta & dmp::output_mask::ACCEL as u16) != 0 {
             delta2 |= dmp::output_mask2::ACCEL_ACCURACY;
         }
@@ -408,10 +596,59 @@ where
         }
         if (delta & dmp::output_mask::CPASS_CALIBR as u16) != 0
             || (delta & dmp::output_mask::CPASS as u16) != 0
+            || (delta & dmp::output_mask::QUAT9 as u16) != 0
+            || (delta & dmp::output_mask::GEOMAG as u16) != 0
         {
             delta2 |= dmp::output_mask2::COMPASS_ACCURACY;
         }
+
+        // Check if Screen Rotation (sensor 48) is enabled.
+        // ScreenRotation is sensor 48. SENSORTOCONTROLBITS[48] = 0x0008 (Header2).
+        // If enabled, we must set SCREEN_ROTATION bit in DATA_OUT_CTL2.
+        if (self.device.base_state.enabled_sensors_1 & (1 << (48 - 32))) != 0 {
+            log::debug!(
+                "Enabling ScreenRotation logic. delta2 before: {:04x}",
+                delta2
+            );
+            delta2 |= dmp::output_mask2::SCREEN_ROTATION;
+            // Screen Rotation depends on BAC (Basic Activity Classification)
+            delta2 |= dmp::output_mask2::ACTIVITY_RECOGNITION_BAC;
+            // Also enable BAC and use accel-only mode (no compass needed for screen rotation)
+            event_control |= dmp::motion_event_control::BAC_WEAR_EN;
+            event_control |= dmp::motion_event_control::BAC_ACCEL_ONLY_EN;
+            needs_bac = true;
+            needs_accel_ready = true;
+            log::debug!(
+                "ScreenRotation enabled. delta2 after: {:04x}, event_control: {:04x}",
+                delta2,
+                event_control
+            );
+        }
+        // Enable BAC output when ActivityClassification is requested.
+        if (self.device.base_state.enabled_sensors_1 & (1 << (47 - 32))) != 0 {
+            delta2 |= dmp::output_mask2::ACTIVITY_RECOGNITION_BAC;
+            // BAC needs to be enabled to produce activity classification output.
+            event_control |= dmp::motion_event_control::BAC_WEAR_EN;
+            event_control |= dmp::motion_event_control::BAC_ACCEL_ONLY_EN;
+            needs_bac = true;
+            needs_accel_ready = true;
+            // Activity recognition depends on pedometer engine.
+            event_control |= dmp::motion_event_control::PEDOMETER_EN;
+            if let Err(e) = self.set_ped_y_ratio(BAC_PED_Y_RATIO_WEARABLE) {
+                log::warn!("Failed to set BAC ped_y_ratio: {:?}", e);
+            }
+        }
+        // Enable Flip/Pickup output when requested.
+        if (self.device.base_state.enabled_sensors_1 & (1 << (46 - 32))) != 0 {
+            delta2 |= dmp::output_mask2::PICKUP;
+            needs_accel_ready = true;
+            event_control |= dmp::motion_event_control::FLIP_PICKUP_EN;
+        }
         // TODO: Add other sensors as needed
+
+        if delta2 != 0 && (delta & dmp::output_mask::HEADER2) == 0 {
+            delta |= dmp::output_mask::HEADER2;
+        }
 
         self.device.write_mems(
             dmp::data_output_control::DATA_OUT_CTL1,
@@ -430,6 +667,11 @@ where
 
         if delta & dmp::output_mask::QUAT9 as u16 != 0 {
             event_control |= dmp::motion_event_control::NINE_AXIS_EN;
+            if (data_rdy_status & dmp::data_ready_status::SECONDARY_COMPASS) != 0 {
+                event_control |= dmp::motion_event_control::GEOMAG_EN;
+            }
+            // Ensure 9-axis thresholds are set to defaults
+            self.set_9axis_thresholds_defaults()?;
         }
         if delta & dmp::output_mask::PED_STEPDET as u16 != 0
             || delta & dmp::output_mask::PED_STEPIND as u16 != 0
@@ -440,10 +682,68 @@ where
             event_control |= dmp::motion_event_control::GEOMAG_EN;
         }
 
+        if enable
+            && (delta & (dmp::output_mask::QUAT9 as u16 | dmp::output_mask::GEOMAG as u16) != 0)
+        {
+            let mut quat9_div = self.get_sensor_rate(OdrSensor::Quat9).unwrap_or(0);
+            if quat9_div <= 0 {
+                quat9_div = 10;
+            }
+
+            let cpass_div = self.get_sensor_rate(OdrSensor::Cpass).unwrap_or(0);
+            if cpass_div <= 0 {
+                self.set_sensor_rate(OdrSensor::Cpass, quat9_div)?;
+            }
+
+            let geomag_div = self.get_sensor_rate(OdrSensor::Geomag).unwrap_or(0);
+            if geomag_div <= 0 {
+                self.set_sensor_rate(OdrSensor::Geomag, quat9_div)?;
+            }
+
+            let cpass_cal_div = self.get_sensor_rate(OdrSensor::CpassCalibr).unwrap_or(0);
+            if cpass_cal_div <= 0 {
+                self.set_sensor_rate(OdrSensor::CpassCalibr, quat9_div)?;
+            }
+        }
+
+        if matches!(
+            sensor,
+            Sensor::ActivityClassification | Sensor::FlipPickup | Sensor::ScreenRotation
+        ) {
+            debug!(
+                "enable_dmp_sensor({:?}, enable={}): enabled_sensors_1=0x{:08X} delta1=0x{:04X} delta2=0x{:04X} motion=0x{:04X}",
+                sensor,
+                enable,
+                self.device.base_state.enabled_sensors_1,
+                delta,
+                delta2,
+                event_control
+            );
+        }
+
+        if needs_accel_ready {
+            data_rdy_status |= dmp::data_ready_status::ACCEL;
+            event_control |= dmp::motion_event_control::ACCEL_CAL_EN;
+        }
+
         self.device.write_mems(
             dmp::data_output_control::MOTION_EVENT_CTL,
             &event_control.to_be_bytes(),
         )?;
+
+        if enable && needs_bac {
+            if let Err(e) = self.set_bac_rate(dmp::AlgoFreq::Freq56Hz) {
+                log::warn!("Failed to set BAC rate to 56Hz: {:?}", e);
+            }
+            if let Err(e) = self.reset_bac_states() {
+                log::warn!("Failed to reset BAC states: {:?}", e);
+            }
+        }
+
+        self.output_mask1 = delta;
+        self.output_mask2 = delta2;
+
+        self.device.force_low_noise()?;
 
         Ok(())
     }
@@ -451,6 +751,7 @@ where
     /// Set data output control register 1
     pub fn set_data_output_control1(&mut self, output_mask: u16) -> Result<(), Icm20948Error> {
         let bytes = output_mask.to_be_bytes();
+        self.output_mask1 = output_mask;
         self.device
             .write_mems(dmp::data_output_control::DATA_OUT_CTL1, &bytes)
     }
@@ -458,6 +759,7 @@ where
     /// Set data output control register 2
     pub fn set_data_output_control2(&mut self, output_mask: u16) -> Result<(), Icm20948Error> {
         let bytes = output_mask.to_be_bytes();
+        self.output_mask2 = output_mask;
         self.device
             .write_mems(dmp::data_output_control::DATA_OUT_CTL2, &bytes)
     }
@@ -489,6 +791,40 @@ where
         let bytes = motion_mask.to_be_bytes();
         self.device
             .write_mems(dmp::data_output_control::MOTION_EVENT_CTL, &bytes)
+    }
+
+    /// Read key DMP output control registers for debugging.
+    pub fn read_output_control_registers(
+        &mut self,
+    ) -> Result<(u16, u16, u16, u16, u16, u16), Icm20948Error> {
+        let mut buf = [0u8; 2];
+        self.device
+            .read_mems(dmp::data_output_control::DATA_OUT_CTL1, &mut buf)?;
+        let out_ctl1 = u16::from_be_bytes(buf);
+        self.device
+            .read_mems(dmp::data_output_control::DATA_OUT_CTL2, &mut buf)?;
+        let out_ctl2 = u16::from_be_bytes(buf);
+        self.device
+            .read_mems(dmp::data_output_control::DATA_INTR_CTL, &mut buf)?;
+        let data_intr_ctl = u16::from_be_bytes(buf);
+        self.device
+            .read_mems(dmp::data_output_control::DATA_RDY_STATUS, &mut buf)?;
+        let data_rdy_status = u16::from_be_bytes(buf);
+        self.device
+            .read_mems(dmp::data_output_control::MOTION_EVENT_CTL, &mut buf)?;
+        let motion_event_ctl = u16::from_be_bytes(buf);
+        self.device
+            .read_mems(dmp::data_output_control::FIFO_WATERMARK, &mut buf)?;
+        let fifo_watermark = u16::from_be_bytes(buf);
+
+        Ok((
+            out_ctl1,
+            out_ctl2,
+            data_intr_ctl,
+            data_rdy_status,
+            motion_event_ctl,
+            fifo_watermark,
+        ))
     }
 
     /// Set sensor rate
@@ -535,7 +871,7 @@ where
         self.device
             .write_mems(odr_count_addr, &odr_count_zero.to_be_bytes())?;
 
-        self.device.low_power(true)?; // Activar el modo de bajo consumo
+        self.device.force_low_noise()?;
 
         Ok(())
     }
@@ -559,6 +895,11 @@ where
         let mut bytes = [0u8; 2];
         self.device.read_mems(odr_addr, &mut bytes)?;
         Ok(i16::from_be_bytes(bytes))
+    }
+
+    /// Get current FIFO byte count.
+    pub fn get_fifo_count(&mut self) -> Result<usize, Icm20948Error> {
+        self.device.get_fifo_count()
     }
 
     /// Set batch mode parameters
@@ -801,6 +1142,50 @@ where
         self.device.write_mems(dmp::wom::THRESHOLD, &bytes)
     }
 
+    /// Enable/Disable Hardware Wake-on-Motion (using ACCEL_INTEL_CTRL)
+    /// This triggers the WOM_INT bit (0x08) in INT_STATUS
+    pub fn enable_hardware_wom(&mut self, enable: bool) -> Result<(), Icm20948Error> {
+        use crate::register::registers::bank0;
+        use crate::register::registers::bank2;
+
+        if enable {
+            // 1. Enable ACCEL_INTEL_CTRL
+            // Bit 1: ACCEL_INTEL_EN (1=Enable)
+            // Bit 0: ACCEL_INTEL_MODE_INT (1=Compare with previous sample)
+            let intel_ctrl = 0x02 | 0x01;
+            self.device
+                .write_mems_reg::<bank2::Bank>(bank2::ACCEL_INTEL_CTRL, intel_ctrl)?;
+
+            // 2. Enable WOM Interrupt in INT_ENABLE (Bank 0)
+            let mut int_enable = self
+                .device
+                .read_mems_reg::<bank0::Bank>(bank0::INT_ENABLE)?;
+            int_enable |= crate::types::bits::WAKE_ON_MOTION_INT;
+            self.device
+                .write_mems_reg::<bank0::Bank>(bank0::INT_ENABLE, int_enable)?;
+        } else {
+            // Disable WOM Interrupt
+            let mut int_enable = self
+                .device
+                .read_mems_reg::<bank0::Bank>(bank0::INT_ENABLE)?;
+            int_enable &= !crate::types::bits::WAKE_ON_MOTION_INT;
+            self.device
+                .write_mems_reg::<bank0::Bank>(bank0::INT_ENABLE, int_enable)?;
+
+            // Disable ACCEL_INTEL_CTRL
+            self.device
+                .write_mems_reg::<bank2::Bank>(bank2::ACCEL_INTEL_CTRL, 0x00)?;
+        }
+        Ok(())
+    }
+
+    /// Set Hardware Wake-on-Motion Threshold
+    pub fn set_hardware_wom_threshold(&mut self, threshold: u8) -> Result<(), Icm20948Error> {
+        use crate::register::registers::bank2;
+        self.device
+            .write_mems_reg::<bank2::Bank>(bank2::ACCEL_WOM_THR, threshold)
+    }
+
     /// Set wake on motion time threshold
     pub fn set_wom_time_threshold(&mut self, threshold: u16) -> Result<(), Icm20948Error> {
         let bytes = threshold.to_be_bytes();
@@ -833,25 +1218,32 @@ where
     }
 
     /// Set accelerometer full-scale range
+    /// Set accelerometer full-scale range
     pub fn set_accel_fsr(&mut self, accel_fsr_g: u16) -> Result<(), Icm20948Error> {
-        // Primer valor siempre fijo para 4g (0x04000000)
-        let acc_scale = 0x04000000i32;
+        // Values derived from Icm20948Dmp3Driver.c
+        // ACC_SCALE
+        let acc_scale = match accel_fsr_g {
+            2 => 0x02000000i32,  // 33554432 (2^25)
+            4 => 0x04000000i32,  // 67108864 (2^26)
+            8 => 0x08000000i32,  // 134217728 (2^27)
+            16 => 0x10000000i32, // 268435456 (2^28)
+            _ => return Err(Icm20948Error::InvalidParameter),
+        };
         let acc_scale_bytes = acc_scale.to_be_bytes();
         self.device.write_mems(dmp::fsr::ACC, &acc_scale_bytes)?;
 
-        // Segundo valor ajustado según la escala seleccionada
+        // ACC_SCALE2
         let acc_scale2 = match accel_fsr_g {
-            2 => 0x00020000i32,
-            4 => 0x00040000i32,
-            8 => 0x00080000i32,
-            16 => 0x00100000i32,
+            2 => 0x00080000i32,  // 524288 (2^19)
+            4 => 0x00040000i32,  // 262144 (2^18)
+            8 => 0x00020000i32,  // 131072 (2^17)
+            16 => 0x00010000i32, // 65536 (2^16)
             _ => return Err(Icm20948Error::InvalidParameter),
         };
-
         let acc_scale2_bytes = acc_scale2.to_be_bytes();
-        self.device.write_mems(dmp::fsr::ACC2, &acc_scale2_bytes)?; // Asegúrate de que ACC2 es la constante correcta
+        self.device.write_mems(dmp::fsr::ACC2, &acc_scale2_bytes)?;
 
-        // Actualizar también la escala en el dispositivo principal
+        // Update Hardware
         let accel_scale = match accel_fsr_g {
             2 => AccelFullScale::Fs2G,
             4 => AccelFullScale::Fs4G,
@@ -923,6 +1315,7 @@ where
             let bytes = b2s_mtx[i].to_be_bytes();
             self.device.write_mems(mtx_addrs[i], &bytes)?;
         }
+        debug!("B2S matrix written: {:?}", b2s_mtx);
 
         Ok(())
     }
@@ -1005,6 +1398,7 @@ where
         &mut self,
         orientation_params: &[i32; 4],
     ) -> Result<(), Icm20948Error> {
+        println!("Orientation params (Q30): {:?}", orientation_params);
         let q0_bytes = orientation_params[0].to_be_bytes();
         let q1_bytes = orientation_params[1].to_be_bytes();
         let q2_bytes = orientation_params[2].to_be_bytes();
@@ -1073,6 +1467,7 @@ where
             Sensor::Gravity => AndroidSensor::Gravity,
             Sensor::LinearAcceleration => AndroidSensor::LinearAcceleration,
             Sensor::Orientation => AndroidSensor::Orientation,
+            Sensor::ScreenRotation => AndroidSensor::ScreenRotation,
             Sensor::B2S => AndroidSensor::B2S,
             _ => AndroidSensor::NumMax,
         }
@@ -1099,6 +1494,7 @@ where
             AndroidSensor::Gravity => Sensor::Gravity,
             AndroidSensor::LinearAcceleration => Sensor::LinearAcceleration,
             AndroidSensor::Orientation => Sensor::Orientation,
+            AndroidSensor::ScreenRotation => Sensor::ScreenRotation,
             _ => Sensor::Max,
         }
     }
@@ -1106,5 +1502,12 @@ where
     pub fn set_int_pin_config(&mut self, config: u8) -> Result<(), Icm20948Error> {
         self.device
             .write_mems_reg::<bank0::Bank>(bank0::INT_PIN_CFG, config)
+    }
+
+    pub fn set_9axis_thresholds_defaults(&mut self) -> Result<(), Icm20948Error> {
+        // TODO: Implement actual threshold writing if needed.
+        // For now, we rely on the scale factor fix.
+        // println!("set_9axis_thresholds_defaults called");
+        Ok(())
     }
 }
