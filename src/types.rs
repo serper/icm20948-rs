@@ -136,7 +136,7 @@ pub mod scale_factor {
     pub const AK8963_16BIT: i32 = 161061273; // 0.15 µT * (1 << 30)
     pub const AK09911: i32 = 644245094; // 0.6 µT * (1 << 30)
     pub const AK09912: i32 = 161061273; // 0.15 µT * (1 << 30)
-    pub const AK09916: i32 = 1073741824; // 1.0 * (1 << 30) - Identity scale for DMP fusion
+    pub const AK09916: i32 = 161061273; // 0.15 µT * (1 << 30)
 }
 
 /// Valores específicos para registros del magnetómetro

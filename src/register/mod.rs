@@ -663,6 +663,7 @@ pub mod ak_reg {
     // AK09916 específico
     pub const AK09916_STATUS1: u8 = 0x10;
     pub const AK09916_STATUS2: u8 = 0x18;
+    pub const AK09916_DMP_READ: u8 = 0x03;
     pub const AK09916_CNTL1: u8 = 0x30;
     pub const AK09916_CNTL2: u8 = 0x31;
     pub const AK09916_CNTL3: u8 = 0x32;
@@ -671,6 +672,7 @@ pub mod ak_reg {
     // Otras variantes de AK
     pub const AK09911_STATUS1: u8 = 0x10;
     pub const AK09911_STATUS2: u8 = 0x18;
+    pub const AK09911_DMP_READ: u8 = 0x03;
     pub const AK09911_CNTL1: u8 = 0x30;
     pub const AK09911_CNTL2: u8 = 0x31;
     pub const AK09911_CNTL3: u8 = 0x32;
@@ -678,6 +680,7 @@ pub mod ak_reg {
 
     pub const AK09912_STATUS1: u8 = 0x10;
     pub const AK09912_STATUS2: u8 = 0x18;
+    pub const AK09912_DMP_READ: u8 = 0x03;
     pub const AK09912_CNTL1: u8 = 0x30;
     pub const AK09912_CNTL2: u8 = 0x31;
     pub const AK09912_CNTL3: u8 = 0x32;

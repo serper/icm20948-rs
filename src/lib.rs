@@ -26,6 +26,8 @@ pub mod types;
 
 #[cfg(feature = "rhai")]
 pub mod api_rhai;
+#[cfg(feature = "rhai")]
+pub mod geomag;
 
 // Re-exports públicos
 pub use controls::{AccelLpfSetting, GyroLpfSetting, SampleRate};

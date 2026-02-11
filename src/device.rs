@@ -868,7 +868,7 @@ where
 
     /// Set gyro divider
     pub fn set_gyro_divider(&mut self, div: u8) -> Result<(), Icm20948Error> {
-        self.base_state.gyro_divider = GyroFullScale::from(div) as u16;
+        self.base_state.gyro_divider = div as u16;
         self.write_mems_reg::<bank2::Bank>(bank2::GYRO_SMPLRT_DIV, div)
     }
 

@@ -5,9 +5,11 @@ use crate::dmp_fifo::{DmpFifoError, DmpFifoState, Quaternion};
 #[cfg(feature = "rhai")]
 use crate::interface::I2cInterface;
 #[cfg(feature = "rhai")]
+use crate::geomag;
+#[cfg(feature = "rhai")]
 use crate::register::dmp;
 #[cfg(feature = "rhai")]
-use crate::register::registers::{bank0, bank2};
+use crate::register::registers::{bank0, bank1, bank2};
 #[cfg(feature = "rhai")]
 use crate::selftest;
 #[cfg(feature = "rhai")]
@@ -42,6 +44,9 @@ static LAST_MPU_DATA: Lazy<Mutex<HashMap<usize, rhai::Map>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 #[cfg(feature = "rhai")]
 static MPU_SHARED_INSTANCES: Lazy<Mutex<HashMap<String, Arc<Mutex<LinuxDmp>>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+#[cfg(feature = "rhai")]
+static ACTIVE_MPU_MONITORS: Lazy<Mutex<HashMap<usize, usize>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Wrapper to expose ICM20948 functionality to Rhai
@@ -90,6 +95,31 @@ fn get_last_data(icm: &RhaiIcm20948) -> rhai::Map {
         }
     }
     rhai::Map::new()
+}
+
+#[cfg(feature = "rhai")]
+pub fn set_monitor_active_for_key(key: usize, active: bool) {
+    if let Ok(mut guard) = ACTIVE_MPU_MONITORS.lock() {
+        if active {
+            let entry = guard.entry(key).or_insert(0);
+            *entry = entry.saturating_add(1);
+        } else if let Some(entry) = guard.get_mut(&key) {
+            if *entry > 1 {
+                *entry -= 1;
+            } else {
+                guard.remove(&key);
+            }
+        }
+    }
+}
+
+#[cfg(feature = "rhai")]
+fn has_active_monitor_for_key(key: usize) -> bool {
+    ACTIVE_MPU_MONITORS
+        .lock()
+        .ok()
+        .map(|guard| guard.contains_key(&key))
+        .unwrap_or(false)
 }
 
 #[cfg(feature = "rhai")]
@@ -215,6 +245,68 @@ fn quat_to_gravity_g(quat: Quaternion) -> [f32; 3] {
 }
 
 #[cfg(feature = "rhai")]
+fn apply_mount_matrix_vec(m: [i8; 9], v: [f32; 3]) -> [f32; 3] {
+    [
+        m[0] as f32 * v[0] + m[1] as f32 * v[1] + m[2] as f32 * v[2],
+        m[3] as f32 * v[0] + m[4] as f32 * v[1] + m[5] as f32 * v[2],
+        m[6] as f32 * v[0] + m[7] as f32 * v[1] + m[8] as f32 * v[2],
+    ]
+}
+
+#[cfg(feature = "rhai")]
+fn qconj(q: &Quaternion) -> Quaternion {
+    Quaternion {
+        w: q.w,
+        x: -q.x,
+        y: -q.y,
+        z: -q.z,
+        heading_accuracy_deg: None,
+    }
+}
+
+#[cfg(feature = "rhai")]
+fn qmul(a: &Quaternion, b: &Quaternion) -> Quaternion {
+    Quaternion {
+        w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+        x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+        heading_accuracy_deg: a.heading_accuracy_deg,
+    }
+}
+
+#[cfg(feature = "rhai")]
+fn apply_mount_correction_quat(quat: Quaternion, mount: [i8; 9]) -> Quaternion {
+    if let Some(q_mount) = crate::dmp_fifo::quaternion_from_mount_matrix(mount) {
+        let qc = qconj(&q_mount);
+        qmul(&quat, &qc)
+    } else {
+        quat
+    }
+}
+
+#[cfg(feature = "rhai")]
+fn quat_to_euler_raw(quaternion: &Quaternion) -> [f32; 3] {
+    let w = quaternion.w;
+    let x = quaternion.x;
+    let y = quaternion.y;
+    let z = quaternion.z;
+
+    let m00 = 1.0 - 2.0 * (y * y + z * z);
+    let m10 = 2.0 * (x * y + w * z);
+    let m20 = 2.0 * (x * z - w * y);
+    let m21 = 2.0 * (y * z + w * x);
+    let m22 = 1.0 - 2.0 * (x * x + y * y);
+
+    let yaw = (-m10).atan2(m00);
+    let pitch = (-m21).atan2(m22);
+    let roll = (m20).atan2((1.0 - m20 * m20).sqrt());
+
+    let rad_to_deg = 180.0 / std::f32::consts::PI;
+    [roll * rad_to_deg, pitch * rad_to_deg, yaw * rad_to_deg]
+}
+
+#[cfg(feature = "rhai")]
 fn u8_array_to_rhai(values: [u8; 6]) -> rhai::Array {
     let mut array = rhai::Array::with_capacity(values.len());
     for value in values {
@@ -246,6 +338,15 @@ fn i16_array3_to_rhai(values: [i16; 3]) -> rhai::Array {
     let mut array = rhai::Array::with_capacity(values.len());
     for value in values {
         array.push((value as i64).into());
+    }
+    array
+}
+
+#[cfg(feature = "rhai")]
+fn f32_array3_to_rhai(values: [f32; 3]) -> rhai::Array {
+    let mut array = rhai::Array::with_capacity(values.len());
+    for value in values {
+        array.push((value as f64).into());
     }
     array
 }
@@ -344,56 +445,50 @@ pub fn fifo_state_to_map(dmp: &LinuxDmp, state: &DmpFifoState) -> rhai::Map {
     let mut accel_g: Option<[f32; 3]> = None;
     let mut gravity_g: Option<[f32; 3]> = None;
     let mut compass_ut: Option<[f32; 3]> = None;
-    let mut compass_ut_raw: Option<[f32; 3]> = None;
+    let mount = dmp.device.base_state.mounting_matrix;
+    let apply_mount = |v: [f32; 3]| -> [f32; 3] { apply_mount_matrix_vec(mount, v) };
+    let apply_quat = |q: Quaternion| -> Quaternion { apply_mount_correction_quat(q, mount) };
 
     if let Some(accel) = state.accel_data {
-        map.insert("accel_raw".into(), vec3i16_to_map(accel).into());
-        let g = convert_accel_raw_to_g(dmp, accel);
+        let g = apply_mount(convert_accel_raw_to_g(dmp, accel));
         accel_g = Some(g);
         map.insert("accel".into(), vec3f_to_map(g).into());
     }
 
     if let Some(gyro) = state.gyro_data {
-        map.insert(
-            "gyro".into(),
-            vec3f_to_map(convert_gyro_raw_to_rads(dmp, gyro)).into(),
-        );
-    }
-
-    if let Some(gyro_bias) = state.gyro_bias {
-        map.insert(
-            "gyro_bias".into(),
-            vec3f_to_map(convert_gyro_raw_to_rads(dmp, gyro_bias)).into(),
-        );
+        let g = apply_mount(convert_gyro_raw_to_rads(dmp, gyro));
+        map.insert("gyro".into(), vec3f_to_map(g).into());
     }
 
     if let Some(compass) = state.compass_data {
         map.insert("compass_raw".into(), vec3i16_to_map(compass).into());
-        let ut = convert_compass_raw_to_ut(dmp, compass);
-        compass_ut_raw = Some(ut);
+        let ut = apply_mount(convert_compass_raw_to_ut(dmp, compass));
         compass_ut = Some(ut);
-        map.insert("compass".into(), vec3f_to_map(ut).into());
     }
 
     if let Some(quat6) = state.quaternion6 {
-        map.insert("quat6".into(), quat_to_map(quat6).into());
+        let q = apply_quat(quat6);
+        map.insert("quat6".into(), quat_to_map(q).into());
     }
 
     if let Some(quat9) = state.quaternion9 {
-        map.insert("quat9".into(), quat_to_map(quat9).into());
+        let q = apply_quat(quat9);
+        map.insert("quat9".into(), quat_to_map(q).into());
     }
 
     if let Some(quatp6) = state.quaternionp6 {
-        map.insert("quatp6".into(), quat_to_map(quatp6).into());
+        let q = apply_quat(quatp6);
+        map.insert("quatp6".into(), quat_to_map(q).into());
     }
 
     if let Some(geomag) = state.geomag_data {
-        map.insert("geomag".into(), quat_to_map(geomag).into());
+        let q = apply_quat(geomag);
+        map.insert("geomag".into(), quat_to_map(q).into());
     }
 
     if let Some(gyro_calibr) = state.gyro_calibr {
-        let mut gyro_map = vec3f_to_map(convert_gyro_calibr_q20_to_rads(gyro_calibr));
-        gyro_map.insert("raw_q20".into(), i32_array3_to_rhai(gyro_calibr).into());
+        let g = apply_mount(convert_gyro_calibr_q20_to_rads(gyro_calibr));
+        let mut gyro_map = vec3f_to_map(g);
         if let Some(accuracy) = state.gyro_accuracy {
             gyro_map.insert("accuracy".into(), (accuracy as i64).into());
         }
@@ -401,16 +496,17 @@ pub fn fifo_state_to_map(dmp: &LinuxDmp, state: &DmpFifoState) -> rhai::Map {
     }
 
     if let Some(compass_calibr) = state.compass_calibr {
-        let ut = convert_compass_calibr_q16_to_ut(compass_calibr);
-        if compass_ut.is_none() {
-            compass_ut = Some(ut);
-        }
+        let ut = apply_mount(convert_compass_calibr_q16_to_ut(compass_calibr));
+        compass_ut = Some(ut);
         let mut compass_map = vec3f_to_map(ut);
-        compass_map.insert("raw_q16".into(), i32_array3_to_rhai(compass_calibr).into());
         if let Some(accuracy) = state.compass_accuracy {
             compass_map.insert("accuracy".into(), (accuracy as i64).into());
         }
         map.insert("compass_calibr".into(), compass_map.into());
+    }
+
+    if let Some(ut) = compass_ut {
+        map.insert("compass".into(), vec3f_to_map(ut).into());
     }
 
     if let Some(pressure) = state.pressure_data {
@@ -469,7 +565,8 @@ pub fn fifo_state_to_map(dmp: &LinuxDmp, state: &DmpFifoState) -> rhai::Map {
         .or(state.quaternion6)
         .or(state.quaternionp6)
     {
-        let g = quat_to_gravity_g(quat);
+        let q = apply_quat(quat);
+        let g = quat_to_gravity_g(q);
         gravity_g = Some(g);
         map.insert("gravity".into(), vec3f_to_map(g).into());
     }
@@ -477,35 +574,6 @@ pub fn fifo_state_to_map(dmp: &LinuxDmp, state: &DmpFifoState) -> rhai::Map {
     if let (Some(acc), Some(gr)) = (accel_g, gravity_g) {
         let lin = [acc[0] - gr[0], acc[1] - gr[1], acc[2] - gr[2]];
         map.insert("linear_accel".into(), vec3f_to_map(lin).into());
-    }
-
-    // For heading diagnostics, use only raw compass stream to avoid frame mixing
-    // with calibrated payload packets that may arrive independently.
-    if let (Some(mag), Some(acc)) = (compass_ut_raw, gravity_g.or(accel_g)) {
-        if let Some(compass_heading) = compute_compass_heading(acc, mag) {
-            let mut heading_map = rhai::Map::new();
-            heading_map.insert("roll".into(), (compass_heading.roll_deg as f64).into());
-            heading_map.insert("pitch".into(), (compass_heading.pitch_deg as f64).into());
-            heading_map.insert(
-                "heading".into(),
-                (compass_heading.heading_deg as f64).into(),
-            );
-            heading_map.insert(
-                "heading_raw".into(),
-                (compass_heading.heading_raw_deg as f64).into(),
-            );
-            heading_map.insert(
-                "source".into(),
-                if gravity_g.is_some() {
-                    "gravity"
-                } else {
-                    "accel"
-                }
-                .into(),
-            );
-            heading_map.insert("mag_source".into(), "compass".into());
-            map.insert("compass_heading".into(), heading_map.into());
-        }
     }
 
     if map.contains_key("quat9") {
@@ -521,23 +589,6 @@ pub fn fifo_state_to_map(dmp: &LinuxDmp, state: &DmpFifoState) -> rhai::Map {
         }
     }
 
-    let quat_source = if map.contains_key("quat9") {
-        "quat9"
-    } else if map.contains_key("quat6") {
-        "quat6"
-    } else if map.contains_key("quatp6") {
-        "quatp6"
-    } else {
-        "none"
-    };
-    map.insert("quat_source".into(), quat_source.into());
-
-    let mag_used = map.contains_key("compass")
-        || map.contains_key("geomag")
-        || map.contains_key("compass_calibr")
-        || map.contains_key("compass_accuracy");
-    map.insert("mag_used".into(), mag_used.into());
-
     #[cfg(debug_assertions)]
     {
         // Debug print keys
@@ -552,61 +603,6 @@ pub fn fifo_state_to_map(dmp: &LinuxDmp, state: &DmpFifoState) -> rhai::Map {
     map
 }
 
-#[cfg(feature = "rhai")]
-struct CompassHeading {
-    roll_deg: f32,
-    pitch_deg: f32,
-    heading_deg: f32,
-    heading_raw_deg: f32,
-}
-
-#[cfg(feature = "rhai")]
-fn wrap_deg_360(mut deg: f32) -> f32 {
-    while deg < 0.0 {
-        deg += 360.0;
-    }
-    while deg >= 360.0 {
-        deg -= 360.0;
-    }
-    deg
-}
-
-#[cfg(feature = "rhai")]
-fn compute_compass_heading(accel_g: [f32; 3], mag_ut: [f32; 3]) -> Option<CompassHeading> {
-    let accel_g = crate::dmp_fifo::apply_mount_flip_vec(accel_g);
-    // `mag_ut` from DMP path is already expressed through the configured compass matrix.
-    // Applying mount flip again here can double-transform axes.
-    let mag_ut = mag_ut;
-
-    let norm = (accel_g[0] * accel_g[0] + accel_g[1] * accel_g[1] + accel_g[2] * accel_g[2]).sqrt();
-    if norm < 1.0e-6 {
-        return None;
-    }
-
-    let ax = accel_g[0] / norm;
-    let ay = accel_g[1] / norm;
-    let az = accel_g[2] / norm;
-
-    let roll = ay.atan2(az);
-    let pitch = (-ax).atan2((ay * ay + az * az).sqrt());
-
-    let mx = mag_ut[0];
-    let my = mag_ut[1];
-    let mz = mag_ut[2];
-
-    let mx2 = mx * pitch.cos() + mz * pitch.sin();
-    let my2 = mx * roll.sin() * pitch.sin() + my * roll.cos() - mz * roll.sin() * pitch.cos();
-
-    let heading = my2.atan2(mx2);
-    let heading_raw = my.atan2(mx);
-
-    Some(CompassHeading {
-        roll_deg: roll.to_degrees(),
-        pitch_deg: pitch.to_degrees(),
-        heading_deg: wrap_deg_360(heading.to_degrees()),
-        heading_raw_deg: wrap_deg_360(heading_raw.to_degrees()),
-    })
-}
 
 fn decode_activity(val: u8) -> String {
     if val == 0 {
@@ -1034,15 +1030,15 @@ pub mod icm20948_api {
         Ok(map)
     }
 
-    /// Reads raw accelerometer data from hardware registers (unscaled).
+    /// Reads corrected accelerometer data from hardware registers (g).
     ///
     /// # Syntax
     /// icm.read_accel_raw()
     /// # Parameters:
     /// - icm: Icm20948
     /// # Returns
-    /// Array [x, y, z] (raw int16 values)
-    /// # rhai-autodocs:index:10
+    /// Array [x, y, z] (floats in g)
+    /// # rhai-autodocs:index:11
     #[rhai_fn(global, return_raw)]
     pub fn read_accel_raw(icm: &mut RhaiIcm20948) -> Result<rhai::Array, Box<EvalAltResult>> {
         let mut dmp = icm
@@ -1053,10 +1049,12 @@ pub mod icm20948_api {
             .device
             .accel_read_hw_reg_data()
             .map_err(|e| format!("{:?}", e))?;
-        Ok(i16_array3_to_rhai(raw))
+        let mount = dmp.device.base_state.mounting_matrix;
+        let g = apply_mount_matrix_vec(mount, convert_accel_raw_to_g(&dmp, raw));
+        Ok(f32_array3_to_rhai(g))
     }
 
-    /// Reads raw magnetometer data (unscaled, uncalibrated).
+    /// Reads corrected magnetometer data (uT).
     ///
     /// # Syntax
     /// icm.read_compass_raw(timeout_ms)
@@ -1064,7 +1062,7 @@ pub mod icm20948_api {
     /// - icm: Icm20948
     /// - timeout_ms: int (0-1000 recommended)
     /// # Returns
-    /// Array [x, y, z] (raw int16 values)
+    /// Array [x, y, z] (floats in uT)
     /// # rhai-autodocs:index:10
     #[rhai_fn(global, return_raw)]
     pub fn read_compass_raw(
@@ -1076,7 +1074,9 @@ pub mod icm20948_api {
             .device
             .read_compass_raw(timeout_ms.max(0) as u32)
             .map_err(|e| format!("{:?}", e))?;
-        Ok(i16_array3_to_rhai(raw))
+        let mount = dmp.device.base_state.mounting_matrix;
+        let ut = apply_mount_matrix_vec(mount, convert_compass_raw_to_ut(&dmp, raw));
+        Ok(f32_array3_to_rhai(ut))
     }
 
     /// Reads hardware accel/gyro offsets from sensor registers.
@@ -1335,6 +1335,37 @@ pub mod icm20948_api {
         }
     }
 
+    /// Reads the DMP compass matrix (CPASS_MTX) as raw Q30 integers.
+    ///
+    /// # Syntax
+    /// icm.get_compass_dmp_matrix()
+    /// # Returns
+    /// Array[9] (row-major, i32)
+    /// # rhai-autodocs:index:11
+    #[rhai_fn(global, return_raw)]
+    pub fn get_compass_dmp_matrix(
+        icm: &mut RhaiIcm20948,
+    ) -> Result<rhai::Array, Box<EvalAltResult>> {
+        let mut dmp = icm.inner.lock().map_err(|e| e.to_string())?;
+        let addrs = [
+            dmp::cpass::MTX_00,
+            dmp::cpass::MTX_01,
+            dmp::cpass::MTX_02,
+            dmp::cpass::MTX_10,
+            dmp::cpass::MTX_11,
+            dmp::cpass::MTX_12,
+            dmp::cpass::MTX_20,
+            dmp::cpass::MTX_21,
+            dmp::cpass::MTX_22,
+        ];
+        let mut out = rhai::Array::new();
+        for addr in addrs {
+            let v = read_mems_i32(&mut dmp, addr)?;
+            out.push((v as i64).into());
+        }
+        Ok(out)
+    }
+
     /// Sets the compass soft-iron matrix (row-major, floats).
     ///
     /// # Syntax
@@ -1509,6 +1540,7 @@ pub mod icm20948_api {
     }
 
     /// Reads data from the DMP FIFO.
+    /// If an interrupt monitor is active for this device, returns cached values instead.
     ///
     /// # Syntax
     /// icm.read_data()
@@ -1519,6 +1551,11 @@ pub mod icm20948_api {
     /// # rhai-autodocs:index:7
     #[rhai_fn(global, return_raw)]
     pub fn read_data(icm: &mut RhaiIcm20948) -> Result<rhai::Map, Box<EvalAltResult>> {
+        let key = icm_cache_key(icm);
+        if has_active_monitor_for_key(key) {
+            return Ok(get_last_data(icm));
+        }
+
         let mut dmp = icm.inner.lock().map_err(|e| e.to_string())?;
         let mut state = DmpFifoState::default();
         state.clear_data();
@@ -1535,7 +1572,7 @@ pub mod icm20948_api {
             return Ok(get_last_data(icm));
         }
 
-        Ok(merge_last_data_for_key(icm_cache_key(icm), &map))
+        Ok(merge_last_data_for_key(key, &map))
     }
 
     /// Reads key DMP/INT status registers for debugging.
@@ -1597,6 +1634,68 @@ pub mod icm20948_api {
         map.insert("fifo_watermark".into(), (fifo_watermark as i64).into());
 
         Ok(map)
+    }
+
+    /// Reads gyro scale-related registers from HW and DMP for debugging.
+    ///
+    /// # Syntax
+    /// icm.debug_gyro_scale()
+    /// # Returns
+    /// Map (gyro_config_1, gyro_smplrt_div, timebase_pll, dmp_gyro_fullscale, dmp_gyro_sf)
+    /// # rhai-autodocs:index:10
+    #[rhai_fn(global, return_raw)]
+    pub fn debug_gyro_scale(icm: &mut RhaiIcm20948) -> Result<rhai::Map, Box<EvalAltResult>> {
+        let mut dmp = icm.inner.lock().map_err(|e| e.to_string())?;
+
+        let gyro_config_1 = dmp
+            .device
+            .read_mems_reg::<bank2::Bank>(bank2::GYRO_CONFIG_1)
+            .map_err(|e| Box::<EvalAltResult>::from(format!("{:?}", e)))?;
+        let gyro_smplrt_div = dmp
+            .device
+            .read_mems_reg::<bank2::Bank>(bank2::GYRO_SMPLRT_DIV)
+            .map_err(|e| Box::<EvalAltResult>::from(format!("{:?}", e)))?;
+        let timebase_pll = dmp
+            .device
+            .read_mems_reg::<bank1::Bank>(bank1::TIMEBASE_CORRECTION_PLL)
+            .map_err(|e| Box::<EvalAltResult>::from(format!("{:?}", e)))?;
+
+        let dmp_gyro_fullscale = read_mems_i32(&mut dmp, dmp::fsr::GYRO)?;
+        let dmp_gyro_sf = read_mems_i32(&mut dmp, dmp::scale::GYRO_SF)?;
+
+        let mut map = rhai::Map::new();
+        map.insert("gyro_config_1".into(), (gyro_config_1 as i64).into());
+        map.insert("gyro_smplrt_div".into(), (gyro_smplrt_div as i64).into());
+        map.insert("timebase_pll".into(), (timebase_pll as i64).into());
+        map.insert(
+            "dmp_gyro_fullscale".into(),
+            (dmp_gyro_fullscale as i64).into(),
+        );
+        map.insert("dmp_gyro_sf".into(), (dmp_gyro_sf as i64).into());
+
+        Ok(map)
+    }
+
+    /// Overrides the DMP gyro scale factor (GYRO_SF) directly.
+    ///
+    /// # Syntax
+    /// icm.set_dmp_gyro_sf(value)
+    /// # Parameters:
+    /// - icm: Icm20948
+    /// - value: int (raw Q format scale factor)
+    /// # Returns
+    /// Result (Empty if success)
+    /// # rhai-autodocs:index:12
+    #[rhai_fn(global, return_raw)]
+    pub fn set_dmp_gyro_sf(
+        icm: &mut RhaiIcm20948,
+        value: i64,
+    ) -> Result<(), Box<EvalAltResult>> {
+        let mut dmp = icm.inner.lock().map_err(|e| e.to_string())?;
+        let bytes = (value as i32).to_be_bytes();
+        dmp.device
+            .write_mems(dmp::scale::GYRO_SF, &bytes)
+            .map_err(|e| format!("{:?}", e).into())
     }
 
     /// Reads BAC (Basic Activity Classification) state variables from DMP memory.
@@ -2279,6 +2378,99 @@ pub mod icm20948_statics {
         Ok(val as i64)
     }
 
+    /// Computes atan2(y, x).
+    ///
+    /// # Syntax
+    /// atan2(y, x)
+    /// # Parameters:
+    /// - y: float
+    /// - x: float
+    /// # Returns
+    /// float (radians)
+    /// # rhai-autodocs:index:22
+    #[rhai_fn(global)]
+    pub fn atan2(y: f64, x: f64) -> f64 {
+        y.atan2(x)
+    }
+
+    /// Computes magnetic declination using WMM2025.
+    ///
+    /// # Syntax
+    /// mpu.magnetic_declination(lat, lon, year, month, day)
+    /// # Parameters:
+    /// - lat: float (degrees)
+    /// - lon: float (degrees)
+    /// - year: int
+    /// - month: int (1-12)
+    /// - day: int (1-31)
+    /// # Returns
+    /// float (degrees, positive east)
+    /// # rhai-autodocs:index:22
+    #[rhai_fn(name = "magnetic_declination", global, return_raw)]
+    pub fn magnetic_declination(
+        lat: f64,
+        lon: f64,
+        year: i64,
+        month: i64,
+        day: i64,
+    ) -> Result<f64, Box<EvalAltResult>> {
+        if month < 1 || month > 12 {
+            return Err("Invalid month".into());
+        }
+        if day < 1 || day > 31 {
+            return Err("Invalid day".into());
+        }
+        geomag::magnetic_declination(
+            lat,
+            lon,
+            0.0,
+            year as i32,
+            month as u32,
+            day as u32,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// Computes magnetic declination using WMM2025 (with altitude).
+    ///
+    /// # Syntax
+    /// mpu.magnetic_declination(lat, lon, alt_m, year, month, day)
+    /// # Parameters:
+    /// - lat: float (degrees)
+    /// - lon: float (degrees)
+    /// - alt_m: float (meters above ellipsoid)
+    /// - year: int
+    /// - month: int (1-12)
+    /// - day: int (1-31)
+    /// # Returns
+    /// float (degrees, positive east)
+    /// # rhai-autodocs:index:22
+    #[rhai_fn(name = "magnetic_declination", global, return_raw)]
+    pub fn magnetic_declination_alt(
+        lat: f64,
+        lon: f64,
+        alt_m: f64,
+        year: i64,
+        month: i64,
+        day: i64,
+    ) -> Result<f64, Box<EvalAltResult>> {
+        if month < 1 || month > 12 {
+            return Err("Invalid month".into());
+        }
+        if day < 1 || day > 31 {
+            return Err("Invalid day".into());
+        }
+        geomag::magnetic_declination(
+            lat,
+            lon,
+            alt_m,
+            year as i32,
+            month as u32,
+            day as u32,
+        )
+        .map_err(|e| e.into())
+    }
+
     /// Convert quaternion to Euler angles (degrees).
     ///
     /// # Syntax
@@ -2290,7 +2482,7 @@ pub mod icm20948_statics {
     /// Array [roll, pitch, yaw] (floats in degrees)
     /// # rhai-autodocs:index:22
     #[rhai_fn(global, return_raw)]
-    pub fn quat_to_euler(quat: rhai::Array) -> Result<rhai::Array, Box<EvalAltResult>> {
+pub fn quat_to_euler(quat: rhai::Array) -> Result<rhai::Array, Box<EvalAltResult>> {
         if quat.len() != 4 {
             return Err("Quaternion array must have exactly 4 elements".into());
         }
@@ -2313,8 +2505,7 @@ pub mod icm20948_statics {
             z,
             heading_accuracy_deg: None,
         };
-        // let angles = crate::dmp_fifo::quaternion_to_angles_lockless(&quaternion);
-        let angles = crate::dmp_fifo::quaternion_to_euler_dmp(&quaternion);
+        let angles = quat_to_euler_raw(&quaternion);
         let mut result = rhai::Array::new();
         result.push((angles[0] as f64).into());
         result.push((angles[1] as f64).into());
@@ -2323,7 +2514,7 @@ pub mod icm20948_statics {
     }
 
     #[rhai_fn(name = "quat_to_euler", global, return_raw)]
-    pub fn quat_to_euler_map(quat: rhai::Map) -> Result<rhai::Map, Box<EvalAltResult>> {
+pub fn quat_to_euler_map(quat: rhai::Map) -> Result<rhai::Map, Box<EvalAltResult>> {
         let w = quat
             .get("w")
             .ok_or("Missing quaternion W")?
@@ -2351,7 +2542,7 @@ pub mod icm20948_statics {
             z,
             heading_accuracy_deg: None,
         };
-        let angles = crate::dmp_fifo::quaternion_to_euler_dmp(&quaternion);
+        let angles = quat_to_euler_raw(&quaternion);
         let mut result = rhai::Map::new();
         result.insert("roll".into(), (angles[0] as f64).into());
         result.insert("pitch".into(), (angles[1] as f64).into());

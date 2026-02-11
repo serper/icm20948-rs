@@ -179,22 +179,9 @@ where
             ..Default::default()
         };
 
-        // Configurar matriz de montaje según el tipo de compás
-        match compass_type {
-            CompassType::AK09911 => {
-                compass_config.calibration.mounting_matrix = [-1, 0, 0, 0, -1, 0, 0, 0, 1];
-            }
-            CompassType::AK09912 => {
-                compass_config.calibration.mounting_matrix = [1, 0, 0, 0, 1, 0, 0, 0, 1];
-            }
-            CompassType::AK08963 => {
-                compass_config.calibration.mounting_matrix = [1, 0, 0, 0, 1, 0, 0, 0, 1];
-            }
-            CompassType::AK09916 => {
-                compass_config.calibration.mounting_matrix = [1, 0, 0, 0, -1, 0, 0, 0, -1];
-            }
-            _ => return Err(Icm20948Error::InvalidParameter),
-        }
+        // Default to identity mounting. Intrinsic compass orientation is handled in DMP
+        // matrix construction, and board mounting is applied via accel/gyro mounting.
+        compass_config.calibration.mounting_matrix = [1, 0, 0, 0, 1, 0, 0, 0, 1];
 
         // Configurar límites de self-test
         match compass_type {

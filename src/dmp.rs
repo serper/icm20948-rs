@@ -6,9 +6,10 @@ use crate::device::{
 };
 use crate::dmp3_firmware;
 use crate::interface::Interface;
+use crate::register::ak_reg;
 use crate::register::dmp::{self};
 use crate::register::registers::{bank0, bank1, bank2, bank3};
-use crate::types::data_defs::{AK89XX_SHIFT, AK99XX_SHIFT};
+use crate::types::data_defs::{AK89XX_SHIFT, AK99XX_SHIFT, DATA_AKM_89_BYTES_DMP, DATA_AKM_99_BYTES_DMP};
 use crate::types::{
     bits, scale_factor, AccelFullScale, AndroidSensor, GyroFullScale, OdrSensor, Sensor,
     DMP_LOAD_START, DMP_START_ADDRESS, SENSORTOCONTROLBITS,
@@ -34,6 +35,43 @@ where
     I: Interface<Error = E>,
     D: DelayNs,
 {
+    fn compass_type(&self) -> CompassType {
+        self.device
+            .base_state
+            .compass_config
+            .as_ref()
+            .map(|cfg| cfg.compass_type)
+            .unwrap_or(CompassType::AK09916)
+    }
+
+    fn compass_i2c_addr(&self) -> u8 {
+        self.device
+            .base_state
+            .compass_config
+            .as_ref()
+            .map(|cfg| cfg.compass_i2c_addr)
+            .unwrap_or(0x0C)
+    }
+
+    fn compass_dmp_read_config(&self) -> (u8, u8) {
+        match self.compass_type() {
+            CompassType::AK09911 => (ak_reg::AK09911_DMP_READ, DATA_AKM_99_BYTES_DMP),
+            CompassType::AK09912 => (ak_reg::AK09912_DMP_READ, DATA_AKM_99_BYTES_DMP),
+            CompassType::AK09916 => (ak_reg::AK09916_DMP_READ, DATA_AKM_99_BYTES_DMP),
+            CompassType::AK08963 => (ak_reg::INFO, DATA_AKM_89_BYTES_DMP),
+            CompassType::None => (ak_reg::AK09916_DMP_READ, DATA_AKM_99_BYTES_DMP),
+        }
+    }
+
+    fn compass_mode_reg(&self) -> u8 {
+        match self.compass_type() {
+            CompassType::AK09916 => ak_reg::AK09916_CNTL2,
+            CompassType::AK09911 => ak_reg::AK09911_CNTL2,
+            CompassType::AK09912 => ak_reg::AK09912_CNTL2,
+            CompassType::AK08963 | CompassType::None => ak_reg::MODE,
+        }
+    }
+
     /// Creates a new `DmpDriverIcm20948`.
     pub fn new(device: Icm20948<I, D>) -> Self {
         Self {
@@ -51,17 +89,30 @@ where
         self.device
             .setup_compass(compass::CompassType::AK09916, 0x0C)?;
 
+        let compass_addr = self.compass_i2c_addr();
+        let (compass_read_reg, compass_read_len) = self.compass_dmp_read_config();
+        let compass_mode_reg = self.compass_mode_reg();
+
         // 1. Configurar el I2C auxiliar para el magnetómetr
-        // Para I2C_SLV0 - Leer los 10 bytes desde RSV2
+        // Para I2C_SLV0 - Leer los bytes desde registro de lectura DMP del compas
         self.i2c_controller_configure_peripheral(
-            0, 0x0C, 0x03, 10, true, true, false, true, true, None,
+            0,
+            compass_addr,
+            compass_read_reg,
+            compass_read_len,
+            true,
+            true,
+            false,
+            true,
+            true,
+            None,
         )?;
 
         // Para I2C_SLV1 - Configurar el modo de medición única
         self.i2c_controller_configure_peripheral(
             1,
-            0x0C,
-            0x31,
+            compass_addr,
+            compass_mode_reg,
             1,
             false,
             true,
@@ -158,7 +209,11 @@ where
             0x00000000, 0x40000000,
         ])?;
 
-        self.dmp_set_gyro_sf(4, 3)?; // Set DMP internal gyro scale factor (div=4, level=3 for 2000dps)
+        let gyro_div = self
+            .device
+            .read_mems_reg::<bank2::Bank>(bank2::GYRO_SMPLRT_DIV)?;
+        // Set DMP internal gyro scale factor based on the actual HW divider
+        self.dmp_set_gyro_sf(gyro_div, 3)?;
         self.set_gyro_fsr(2000)?; // Sets GYRO FSR in DMP + Hardware
                                   // self.device.write_mems(dmp::fsr::GYRO, &[0x10, 0x00, 0x00, 0x00])?;
 
@@ -194,6 +249,8 @@ where
         let scale_q30 = Self::compass_scale_q30(cfg.compass_type, cfg.calibration.scale) as i64;
         let shift = match cfg.compass_type {
             CompassType::AK09911 => AK99XX_SHIFT,
+            // AK09912/AK09916 use AK89XX shift in InvenSense reference
+            CompassType::AK09912 | CompassType::AK09916 => AK89XX_SHIFT,
             _ => AK89XX_SHIFT,
         } as i64;
 
@@ -205,20 +262,40 @@ where
             CompassType::AK09911 => [-1, 0, 0, 0, -1, 0, 0, 0, 1],
             CompassType::AK09912 => [1, 0, 0, 0, 1, 0, 0, 0, 1],
             CompassType::AK08963 => [1, 0, 0, 0, 1, 0, 0, 0, 1],
-            CompassType::AK09916 => [1, 0, 0, 0, 1, 0, 0, 0, 1], // Identity (User controls layout)
+            // AK09916 has a fixed axis flip relative to accel/gyro in ICM-20948 (Y/Z inverted).
+            // Match InvenSense reference mounting_matrix_secondary_compass.
+            CompassType::AK09916 => [1, 0, 0, 0, -1, 0, 0, 0, -1],
             CompassType::None => [1, 0, 0, 0, 1, 0, 0, 0, 1],
         };
 
-        // Apply user's mounting matrix to base matrix: result = user_matrix * base_matrix
-        let user_matrix = cfg.calibration.mounting_matrix;
-        let mut combined = [0i8; 9];
+        // Compose compass matrix (match InvenSense compass_dmp_cal):
+        // compass_m = compass_mount * base_matrix
+        // current   = compass_m * sens
+        // final     = soft_iron * current
+        // combined  = transpose(mounting_matrix) * final
+        let compass_mount = cfg.calibration.mounting_matrix;
+        let mounting = self.device.base_state.mounting_matrix;
+        let trans = [
+            mounting[0],
+            mounting[3],
+            mounting[6],
+            mounting[1],
+            mounting[4],
+            mounting[7],
+            mounting[2],
+            mounting[5],
+            mounting[8],
+        ];
+
+        let mut compass_m = [0i8; 9];
         for i in 0..3 {
             for j in 0..3 {
                 let mut acc: i32 = 0;
                 for k in 0..3 {
-                    acc += (user_matrix[i * 3 + k] as i32) * (base_matrix[k * 3 + j] as i32);
+                    acc += (compass_mount[i * 3 + k] as i32)
+                        * (base_matrix[k * 3 + j] as i32);
                 }
-                combined[i * 3 + j] = acc as i8;
+                compass_m[i * 3 + j] = acc as i8;
             }
         }
 
@@ -229,10 +306,10 @@ where
             sens_q30[i] = mult_q30(sens, scale_q30) as i32;
         }
 
-        // Apply combined matrix with sensitivity (Q30)
+        // Apply compass mount matrix with sensitivity (Q30)
         let mut current = [0i32; 9];
         for i in 0..9 {
-            let m = combined[i] as i64;
+            let m = compass_m[i] as i64;
             let s = sens_q30[i % 3] as i64;
             current[i] = (m * s) as i32;
         }
@@ -251,10 +328,23 @@ where
                 final_m[i * 3 + j] = acc as i32;
             }
         }
+
+        // combined = transpose(mounting_matrix) * final_matrix
+        let mut combined = [0i32; 9];
+        for i in 0..3 {
+            for j in 0..3 {
+                let mut acc: i32 = 0;
+                for k in 0..3 {
+                    acc += (trans[i * 3 + k] as i32) * final_m[k * 3 + j];
+                }
+                combined[i * 3 + j] = acc;
+            }
+        }
+
         // Convert to u32 output
         let mut out = [0u32; 9];
         for i in 0..9 {
-            out[i] = final_m[i] as u32;
+            out[i] = combined[i] as u32;
         }
         Some(out)
     }
@@ -317,7 +407,10 @@ where
         }
 
         // 4. Reset gyro scale factor (required after matrix change per InvenSense SDK)
-        self.dmp_set_gyro_sf(0x04, 0x03)?;
+        let gyro_div = self
+            .device
+            .read_mems_reg::<bank2::Bank>(bank2::GYRO_SMPLRT_DIV)?;
+        self.dmp_set_gyro_sf(gyro_div, 0x03)?;
 
         Ok(())
     }
@@ -1016,8 +1109,16 @@ where
     }
 
     /// Sets the gyro scale factor for DMP
-    pub fn dmp_set_gyro_sf(&mut self, div: u8, _gyro_level: i16) -> Result<(), Icm20948Error> {
-        let gyro_level = 4i16; // Due to the addition of API dmp_icm20648_set_gyro_fsr()
+    pub fn dmp_set_gyro_sf(&mut self, div: u8, gyro_level: i16) -> Result<(), Icm20948Error> {
+        // Use caller-provided gyro_level (0..4). For this DMP firmware,
+        // forcing level=4 results in ~2x yaw rate; level=3 matches reality.
+        let gyro_level = if gyro_level < 0 {
+            0u32
+        } else if gyro_level > 4 {
+            4u32
+        } else {
+            gyro_level as u32
+        };
 
         let pll: u8 = self
             .device
@@ -1194,7 +1295,26 @@ where
 
     /// Set gyro full-scale range
     pub fn set_gyro_fsr(&mut self, gyro_fsr_dps: u16) -> Result<(), Icm20948Error> {
-        let scale = match gyro_fsr_dps {
+        // Primero aplica el FSR al hardware
+        let gyro_scale = match gyro_fsr_dps {
+            250 => GyroFullScale::Fs250Dps,
+            500 => GyroFullScale::Fs500Dps,
+            1000 => GyroFullScale::Fs1000Dps,
+            2000 => GyroFullScale::Fs2000Dps,
+            _ => return Err(Icm20948Error::InvalidParameter),
+        };
+        self.device.set_gyro_fullscale(gyro_scale)?;
+
+        // Leer de vuelta el FSR real para sincronizar el DMP con el hardware
+        let hw_scale = self.device.get_gyro_fullscale()?;
+        let hw_fsr_dps = match hw_scale {
+            GyroFullScale::Fs250Dps => 250,
+            GyroFullScale::Fs500Dps => 500,
+            GyroFullScale::Fs1000Dps => 1000,
+            GyroFullScale::Fs2000Dps => 2000,
+        };
+
+        let scale = match hw_fsr_dps {
             250 => 33554432i32,   // 2^25
             500 => 67108864i32,   // 2^26
             1000 => 134217728i32, // 2^27
@@ -1205,16 +1325,13 @@ where
         let bytes = scale.to_be_bytes();
         self.device.write_mems(dmp::fsr::GYRO, &bytes)?;
 
-        // Actualizar también la escala en el dispositivo principal
-        let gyro_scale = match gyro_fsr_dps {
-            250 => GyroFullScale::Fs250Dps,
-            500 => GyroFullScale::Fs500Dps,
-            1000 => GyroFullScale::Fs1000Dps,
-            2000 => GyroFullScale::Fs2000Dps,
-            _ => return Err(Icm20948Error::InvalidParameter),
-        };
+        // Recalcular el GYRO_SF del DMP con el divisor actual del hardware
+        let gyro_div = self
+            .device
+            .read_mems_reg::<bank2::Bank>(bank2::GYRO_SMPLRT_DIV)?;
+        self.dmp_set_gyro_sf(gyro_div, 0x03)?;
 
-        self.device.set_gyro_fullscale(gyro_scale)
+        Ok(())
     }
 
     /// Set accelerometer full-scale range
