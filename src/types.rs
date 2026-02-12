@@ -254,6 +254,7 @@ pub mod dmp_header2 {
     pub const GYRO_ACCURACY: u16 = 0x2000; // Gyro accuracy when changes (HEADER2)
     pub const ACCEL_ACCURACY: u16 = 0x4000; // Accel accuracy when changes (HEADER2)
     pub const SCREEN_ROTATION: u16 = 0x0020; // Screen Rotation (HEADER2)
+    pub const STEP_COUNTER: u16 = 0x0001; // Step Counter (HEADER2)
 }
 
 #[allow(non_upper_case_globals)]

@@ -55,8 +55,10 @@ fn dump_fifo_bytes(buf: &[u8]) -> String {
 
 #[inline]
 fn header_mask() -> u16 {
-    dmp_header::PED_STEPIND
-        | dmp_header::ACCEL
+    // Must NOT include PED_STEPIND (bits 0-2) — it's a 3-bit step count,
+    // not a bitmask flag.  Including it makes mask == 0xFFFF which defeats
+    // the `header & ~mask` validation.  C reference uses mask 0xFFF8.
+    dmp_header::ACCEL
         | dmp_header::GYRO
         | dmp_header::COMPASS
         | dmp_header::ALS
@@ -89,6 +91,10 @@ fn is_header_valid(header: u16) -> bool {
     if header == 0 || header == dmp_header::EMPTY {
         return false;
     }
+    // Reject headers with bits outside the known mask (matching C driver's
+    // check_fifo_decoded_headers: `if (header & ~header_bit_mask) return -1`).
+    // Now that PED_STEPIND is excluded from header_mask(), ~mask == 0x0007,
+    // so this catches headers where only the step-count bits are set.
     if (header & !header_mask()) != 0 {
         return false;
     }
@@ -97,7 +103,7 @@ fn is_header_valid(header: u16) -> bool {
 
 #[inline]
 fn is_header2_valid(header2: u16) -> bool {
-    header2 != 0 && header2 != dmp_header::EMPTY && (header2 & !header2_mask()) == 0
+    header2 != 0 && header2 != dmp_header::EMPTY
 }
 
 #[inline]
@@ -134,6 +140,7 @@ fn calc_payload_size(header: u16, header2: u16) -> usize {
                 dmp_header2::SECONDARY_ON_OFF => dmp_packet_bytes2::SECONDARY_ON_OFF,
                 dmp_header2::SCREEN_ROTATION => dmp_packet_bytes2::SCREEN_ROTATION,
                 dmp_header2::BATCH_MODE_EN => dmp_packet_bytes2::BATCH_MODE,
+                dmp_header2::STEP_COUNTER => dmp_packet_bytes::STEP_COUNTER,
                 _ => 0,
             };
         }
@@ -397,6 +404,8 @@ pub struct DmpFifoState {
     pub pressure_data: Option<[u8; 6]>,
     /// Calibración del giroscopio (Q20)
     pub gyro_calibr: Option<[i32; 3]>,
+    /// Step Count (from Header 2)
+    pub step_count: Option<u32>,
     /// Calibración del compás (Q16)
     pub compass_calibr: Option<[i32; 3]>,
     /// Timestamp del pedómetro
@@ -453,6 +462,7 @@ impl Default for DmpFifoState {
             geomag_data: None,
             pressure_data: None,
             gyro_calibr: None,
+            step_count: None,
             compass_calibr: None,
             pedometer_timestamp: None,
             accel_accuracy: None,
@@ -986,9 +996,29 @@ where
         // Verificar si hay datos disponibles
         let mut fifo_count = self.device.get_fifo_count()?;
 
+        if fifo_debug_enabled() {
+            log::debug!("MPU FIFO count: {}", fifo_count);
+        }
+
+        // Validar conteo excesivo (posible error de bus i2c retornando 0xFFFF)
+        if fifo_count > 4096 {
+            log::debug!(
+                "MPU FIFO count invalid: {} (possible bus error)",
+                fifo_count
+            );
+            self.device
+                .reset_fifo()
+                .map_err(|_| DmpFifoError::DeviceError(Icm20948Error::InvalidOperation))?;
+            state.fifo_buf.clear();
+            return Err(DmpFifoError::DataError);
+        }
+
         // Verificar desbordamiento
-        if fifo_count >= 500 {
-            self.device.reset_fifo()?;
+        if fifo_count >= 1024 {
+            log::warn!("MPU FIFO overflow: count={}", fifo_count);
+            self.device
+                .reset_fifo()
+                .map_err(|_| DmpFifoError::DeviceError(Icm20948Error::InvalidOperation))?;
             state.last_header = dmp_header::EMPTY;
             state.last_header2 = dmp_header::EMPTY;
             state.fifo_buf.clear();
@@ -1019,6 +1049,32 @@ where
             let mut buf = vec![0u8; *count];
             self.device
                 .read_mems_regs::<bank0::Bank>(bank0::FIFO_R_W, &mut buf)?;
+
+            // Detect I2C bus corruption before adding to parse buffer.
+            // A true I2C NACK returns ALL bytes as 0xFF. Legitimate sensor data
+            // frequently contains 0xFF bytes (e.g., signed -1 = 0xFFFF), so we
+            // must only flag reads where nearly ALL bytes are 0xFF.
+            // Note: `buf` is NOT packet-aligned, so checking buf[0:2] for a
+            // "header" value is invalid — it could be mid-packet data.
+            let ff_count = buf.iter().filter(|&&b| b == 0xFF).count();
+            let is_bus_error =
+                ff_count == buf.len() || (buf.len() >= 4 && ff_count * 100 / buf.len() >= 90);
+
+            if is_bus_error {
+                log::debug!(
+                    "MPU FIFO I2C bus error detected: {}/{} bytes are 0xFF, discarding {} bytes",
+                    ff_count,
+                    buf.len(),
+                    buf.len()
+                );
+                self.device.reset_fifo().ok();
+                state.fifo_buf.clear();
+                state.clear_data();
+                state.last_header = dmp_header::EMPTY;
+                state.last_header2 = dmp_header::EMPTY;
+                return Err(DmpFifoError::InvalidPacket);
+            }
+
             state.fifo_buf.extend_from_slice(&buf);
             *count = 0;
         }
@@ -1029,34 +1085,85 @@ where
                 break;
             }
 
-            let header = u16::from_be_bytes([state.fifo_buf[0], state.fifo_buf[1]]);
-            let allowed_header = if self.output_mask1 != 0 {
-                self.output_mask1 | dmp_header::PED_STEPIND
-            } else {
-                header_mask()
-            };
+            let raw_header = u16::from_be_bytes([state.fifo_buf[0], state.fifo_buf[1]]);
+            // Mask out PED_STEPIND (bits 0-2).  This is a 3-bit step count
+            // field, NOT a bitmask flag — it doesn't affect packet payload.
+            // I2C bus noise frequently corrupts these low bits, causing
+            // false header rejections.  Masking them out tolerates that noise
+            // while still catching genuinely corrupt headers via bits 3-15.
+            let header = raw_header & !dmp_header::PED_STEPIND;
+            // Relaxed check: always use header_mask() to allow any valid packet known to the driver.
+            // This prevents desync if the DMP sends data (like PRESSURE) that wasn't explicitly
+            // enabled in the output mask readback but is present in the FIFO.
+            let allowed_header = header_mask();
+
+            // DEBUG: Print mask values (trace level to avoid log flooding)
+            if fifo_debug_enabled() {
+                log::trace!(
+                    "DEBUG: header={:04X}, allowed={:04X}, mask={:04X}, PRESSURE={:04X}",
+                    header,
+                    allowed_header,
+                    header_mask(),
+                    dmp_header::PRESSURE
+                );
+            }
+
             if !is_header_valid(header) || (header & !allowed_header) != 0 {
-                if fifo_debug_enabled() {
-                    let dump_len = state.fifo_buf.len().min(8);
-                    log::warn!(
-                        "MPU FIFO desync: invalid header 0x{:04X}, buf[0..{}]={:02X?}",
-                        header,
-                        dump_len,
-                        &state.fifo_buf[0..dump_len]
-                    );
-                    if fifo_dump_enabled() {
-                        let dump = dump_fifo_bytes(&state.fifo_buf);
-                        log::warn!(
-                            "MPU FIFO raw dump len={} (showing up to {} bytes):\n{}",
-                            state.fifo_buf.len(),
-                            fifo_dump_max(),
-                            dump
-                        );
-                    }
-                }
+                let dump_len = state.fifo_buf.len().min(8);
+                log::debug!(
+                    "MPU FIFO desync: invalid header 0x{:04X} (allowed: 0x{:04X}), buf[0..{}]={:02X?}",
+                    header,
+                    allowed_header,
+                    dump_len,
+                    &state.fifo_buf[0..dump_len]
+                );
+                // reset_fifo now properly disables DMP+FIFO before reset,
+                // preventing the 1-2 byte residual offset that caused the
+                // infinite desync cycle.
                 self.device.reset_fifo().ok();
                 state.fifo_buf.clear();
+                state.clear_data();
+                state.last_header = dmp_header::EMPTY;
+                state.last_header2 = dmp_header::EMPTY;
                 return Err(DmpFifoError::InvalidPacket);
+            }
+
+            // Consistency check: if we have a last known-good header (not 0xFFFF),
+            // verify the new header shares major sensor bits with it.
+            // Valid headers only change by a few bits (e.g., compass calibration,
+            // step count). Garbage headers will differ completely.
+            let last_good = state.last_header;
+            if last_good != 0xFFFF && last_good != 0 {
+                // Compare upper sensor bits (exclude PED_STEPIND bits 0-2)
+                let core_last = last_good & 0xFFF8;
+                let core_new = header & 0xFFF8;
+                // The new header's core bits must be a subset of or equal to
+                // the last good header's core bits plus a few extra allowed flags
+                // (compass_calibr, gyro_calibr, step_detector, geomag, header2).
+                // If the new header has bits NOT present in the last good header
+                // AND those bits are not in the "occasional extras" set, reject.
+                let occasional_extras: u16 = dmp_header::COMPASS_CALIBR
+                    | dmp_header::GYRO_CALIBR
+                    | dmp_header::STEP_DETECTOR
+                    | dmp_header::GEOMAG
+                    | dmp_header::PRESSURE
+                    | dmp_header::HEADER2
+                    | dmp_header::COMPASS;
+                let new_extra_bits = core_new & !core_last;
+                if (new_extra_bits & !occasional_extras) != 0 {
+                    if fifo_debug_enabled() {
+                        log::warn!(
+                            "MPU FIFO header consistency fail: 0x{:04X} vs last_good 0x{:04X}, extra=0x{:04X}",
+                            header, last_good, new_extra_bits
+                        );
+                    }
+                    self.device.reset_fifo().ok();
+                    state.fifo_buf.clear();
+                    state.clear_data();
+                    state.last_header = dmp_header::EMPTY;
+                    state.last_header2 = dmp_header::EMPTY;
+                    return Err(DmpFifoError::InvalidPacket);
+                }
             }
 
             let has_header2 = (header & dmp_header::HEADER2) != 0;
@@ -1070,20 +1177,19 @@ where
                 dmp_header::EMPTY
             };
 
-            let allowed_header2 = if self.output_mask2 != 0 {
-                self.output_mask2
-            } else {
-                header2_mask()
-            };
+            // Relaxed check for header2 as well
+            let allowed_header2 = 0xFFFF; // Allow any header2 bits
             if has_header2
-                && (!is_header2_valid(header2)
-                    || (header2 & !header2_mask()) != 0
-                    || (header2 & !allowed_header2) != 0)
+                && (
+                    !is_header2_valid(header2)
+                    // || (header2 & !header2_mask()) != 0 // Removed to allow unknown bits
+                    // || (header2 & !allowed_header2) != 0 // Removed to allow unrequested but present bits
+                )
             {
                 let swapped = header2.swap_bytes();
                 if is_header2_valid(swapped)
-                    && (swapped & !header2_mask()) == 0
-                    && (swapped & !allowed_header2) == 0
+                // && (swapped & !header2_mask()) == 0
+                // && (swapped & !allowed_header2) == 0
                 {
                     if fifo_debug_enabled() {
                         log::warn!(
@@ -1112,12 +1218,35 @@ where
                     }
                     self.device.reset_fifo().ok();
                     state.fifo_buf.clear();
+                    state.clear_data();
+                    state.last_header = dmp_header::EMPTY;
+                    state.last_header2 = dmp_header::EMPTY;
                     return Err(DmpFifoError::InvalidPacket);
                 }
             }
 
             let payload_size = calc_payload_size(header, header2);
             let total_size = 2 + if has_header2 { 2 } else { 0 } + payload_size;
+
+            // Sanity check: normal DMP packets are ~40-60 bytes.
+            // If the calculated size is unreasonably large, it's
+            // almost certainly a garbage header from bus corruption.
+            const MAX_DMP_PACKET_SIZE: usize = 200;
+            if total_size > MAX_DMP_PACKET_SIZE {
+                log::warn!(
+                    "MPU FIFO garbage header 0x{:04X}: computed size {} exceeds max {}",
+                    header,
+                    total_size,
+                    MAX_DMP_PACKET_SIZE
+                );
+                self.device.reset_fifo().ok();
+                state.fifo_buf.clear();
+                state.clear_data();
+                state.last_header = dmp_header::EMPTY;
+                state.last_header2 = dmp_header::EMPTY;
+                return Err(DmpFifoError::InvalidPacket);
+            }
+
             if state.fifo_buf.len() < total_size {
                 if fifo_debug_enabled() {
                     log::debug!(
@@ -1324,6 +1453,13 @@ where
                 state.pickup_state =
                     Some(u16::from_be_bytes(buffer[0..2].try_into().unwrap()) != 0);
             }
+            if header2 & dmp_header2::BATCH_MODE_EN != 0 {
+                let mut buffer = [0u8; dmp_packet_bytes2::BATCH_MODE];
+                buffer.copy_from_slice(&packet[idx..idx + dmp_packet_bytes2::BATCH_MODE]);
+                idx += dmp_packet_bytes2::BATCH_MODE;
+                // Valor de batch mode no expuesto por ahora.
+                let _ = u16::from_be_bytes(buffer[0..2].try_into().unwrap());
+            }
             if header2 & dmp_header2::ACTIVITY_RECOG != 0 {
                 let mut buffer = [0u8; dmp_packet_bytes2::ACTIVITY_RECOG];
                 buffer.copy_from_slice(&packet[idx..idx + dmp_packet_bytes2::ACTIVITY_RECOG]);
@@ -1341,13 +1477,7 @@ where
                 idx += dmp_packet_bytes2::SECONDARY_ON_OFF;
                 state.secondary_on_off = Some(u16::from_be_bytes(buffer[0..2].try_into().unwrap()));
             }
-            if header2 & dmp_header2::BATCH_MODE_EN != 0 {
-                let mut buffer = [0u8; dmp_packet_bytes2::BATCH_MODE];
-                buffer.copy_from_slice(&packet[idx..idx + dmp_packet_bytes2::BATCH_MODE]);
-                idx += dmp_packet_bytes2::BATCH_MODE;
-                // Valor de batch mode no expuesto por ahora.
-                let _ = u16::from_be_bytes(buffer[0..2].try_into().unwrap());
-            }
+
             if header2 & dmp_header2::SCREEN_ROTATION != 0 {
                 let mut buffer = [0u8; dmp_packet_bytes2::SCREEN_ROTATION];
                 buffer.copy_from_slice(&packet[idx..idx + dmp_packet_bytes2::SCREEN_ROTATION]);
@@ -1356,6 +1486,14 @@ where
                 #[cfg(debug_assertions)]
                 println!("MPU FIFO: Screen Rotation Event: {}", val);
                 state.screen_rotation = Some(val as u8);
+            }
+            if header2 & dmp_header2::STEP_COUNTER != 0 {
+                let mut buffer = [0u8; dmp_packet_bytes::STEP_COUNTER];
+                buffer.copy_from_slice(&packet[idx..idx + dmp_packet_bytes::STEP_COUNTER]);
+                idx += dmp_packet_bytes::STEP_COUNTER;
+                state.step_count = Some(u32::from(u16::from_be_bytes(
+                    buffer[0..2].try_into().unwrap(),
+                )));
             }
 
             let known_bits = dmp_header2::SECONDARY_ON_OFF
@@ -1477,6 +1615,7 @@ impl DmpFifoState {
         self.gyro_accuracy = None;
         self.compass_accuracy = None;
         self.fsync = None;
+        self.step_count = None;
         self.odr_counter = None;
         self.pickup_state = None;
         self.activity_recognition = None;

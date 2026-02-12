@@ -9,7 +9,9 @@ use crate::interface::Interface;
 use crate::register::ak_reg;
 use crate::register::dmp::{self};
 use crate::register::registers::{bank0, bank1, bank2, bank3};
-use crate::types::data_defs::{AK89XX_SHIFT, AK99XX_SHIFT, DATA_AKM_89_BYTES_DMP, DATA_AKM_99_BYTES_DMP};
+use crate::types::data_defs::{
+    AK89XX_SHIFT, AK99XX_SHIFT, DATA_AKM_89_BYTES_DMP, DATA_AKM_99_BYTES_DMP,
+};
 use crate::types::{
     bits, scale_factor, AccelFullScale, AndroidSensor, GyroFullScale, OdrSensor, Sensor,
     DMP_LOAD_START, DMP_START_ADDRESS, SENSORTOCONTROLBITS,
@@ -292,8 +294,7 @@ where
             for j in 0..3 {
                 let mut acc: i32 = 0;
                 for k in 0..3 {
-                    acc += (compass_mount[i * 3 + k] as i32)
-                        * (base_matrix[k * 3 + j] as i32);
+                    acc += (compass_mount[i * 3 + k] as i32) * (base_matrix[k * 3 + j] as i32);
                 }
                 compass_m[i * 3 + j] = acc as i8;
             }
@@ -1515,7 +1516,7 @@ where
         &mut self,
         orientation_params: &[i32; 4],
     ) -> Result<(), Icm20948Error> {
-        println!("Orientation params (Q30): {:?}", orientation_params);
+        debug!("Orientation params (Q30): {:?}", orientation_params);
         let q0_bytes = orientation_params[0].to_be_bytes();
         let q1_bytes = orientation_params[1].to_be_bytes();
         let q2_bytes = orientation_params[2].to_be_bytes();

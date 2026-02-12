@@ -1401,10 +1401,10 @@ where
     /// Lee los datos raw del acelerómetro y los devuelve como valores en G
     pub fn read_accelerometer(&mut self) -> Result<[f32; 3], Icm20948Error> {
         let raw_data = self.accel_read_hw_reg_data()?;
-        eprintln!(
-            "Raw accel data: {:?}, Full scale: {:?}",
-            raw_data, self.base_state.accel_fullscale
-        );
+        // eprintln!(
+        //     "Raw accel data: {:?}, Full scale: {:?}",
+        //     raw_data, self.base_state.accel_fullscale
+        // );
         Ok(accel_raw_to_g(raw_data, self.base_state.accel_fullscale))
     }
 
